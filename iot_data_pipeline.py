@@ -18,7 +18,7 @@ default_args = {
 with DAG(
     dag_id='iot_sqs_to_s3_test',
     default_args=default_args,
-    schedule=None,
+    schedule='@hourly',
     catchup=False,
     tags=['iot', 'test']
 ) as dag:
