@@ -28,10 +28,7 @@ with DAG(
         task_id='wait_for_iot_data',
         sqs_queue=SQS_QUEUE_URL,
         max_messages=1,
-        wait_time_seconds=20, # poll interval
-        mode='reschedule',  # THÊM DÒNG NÀY: Giải phóng worker khi đang đợi
-        poke_interval=30,   # Cứ mỗi 30 giây kiểm tra 1 lần
-        timeout=300,        # Thời gian tối đa cho cả task là 5 phút
+        wait_time_seconds=20,
         aws_conn_id='aws_default' # Airflow sẽ tự dùng IRSA nếu connection này để trống
     )
 
