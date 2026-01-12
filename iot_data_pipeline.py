@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.providers.amazon.aws.operators.s3 import S3CreateObjectOperator
 from airflow.providers.amazon.aws.sensors.sqs import SqsSensor
 from datetime import datetime, timedelta
+from airflow.utils.log.logging_mixin import LoggingMixin
 
 # THAY THẾ CÁC GIÁ TRỊ NÀY THEO TERRAFORM CỦA BẠN
 SQS_QUEUE_URL = "https://sqs.ap-southeast-1.amazonaws.com/408279620390/bme680-sensor-data"
@@ -22,6 +23,13 @@ with DAG(
     catchup=False,
     tags=['iot', 'test']
 ) as dag:
+    
+class DebugSqsSensor(SqsSensor, LoggingMixin):
+    def poke(self, context):
+        self.log.info(f"Checking SQS queue: {self.sqs_queue}")
+        result = super().poke(context)
+        self.log.info(f"Poke result: {result}")
+        return result
 
     # 1. Đợi tin nhắn từ SQS (Kiểm tra quyền Read SQS)
     wait_for_message = SqsSensor(
