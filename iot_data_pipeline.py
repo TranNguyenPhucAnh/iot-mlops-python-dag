@@ -48,9 +48,8 @@ from airflow.providers.amazon.aws.operators.s3 import S3CreateObjectOperator
 from airflow.providers.amazon.aws.sensors.sqs import SqsSensor
 from datetime import datetime, timedelta
 
-# THAY THẾ CÁC GIÁ TRỊ NÀY THEO TERRAFORM CỦA BẠN
 SQS_QUEUE_URL = "https://sqs.ap-southeast-1.amazonaws.com/408279620390/bme680-sensor-data"
-S3_BUCKET = "iot-bme680-data-lake-prod" # Tên bucket bạn tạo bằng Terraform
+S3_BUCKET = "iot-bme680-data-lake-prod"
 
 default_args = {
     'owner': 'phucanh',
@@ -61,26 +60,31 @@ default_args = {
 }
 
 with DAG(
-    dag_id='iot_sqs_to_s3_test',
+    dag_id='iot_sqs_to_s3_test_v2',
     default_args=default_args,
     schedule='@hourly',
     catchup=False,
     tags=['iot', 'test']
 ) as dag:
 
-    # 1. Đợi tin nhắn từ SQS (Kiểm tra quyền Read SQS)
     wait_for_message = SqsSensor(
         task_id='wait_for_iot_data',
         sqs_queue=SQS_QUEUE_URL,
         max_messages=1,
-        wait_time_seconds=15, # sqs polling duration
-        mode='reschedule',  # THÊM DÒNG NÀY: Giải phóng worker khi đang đợi
-        poke_interval=40,   # Cứ mỗi 40 giây gọi API polling 1 lần
-        timeout=600,        # Thời gian tối đa cho cả task là 10 phút
-        aws_conn_id='aws_default' # Airflow sẽ tự dùng IRSA nếu connection này để trống
+        wait_time_seconds=15,
+        
+        # ✅ THAY ĐỔI QUAN TRỌNG:
+        message_filtering='literal',  # hoặc 'jsonpath'
+        message_filtering_match_values=None,  # None = accept any message
+        delete_message_on_reception=False,  # Không xóa message khi nhận (để debug)
+        
+        mode='poke',  # ← THAY ĐỔI: Dùng poke thay vì reschedule để debug dễ hơn
+        poke_interval=30,  # Kiểm tra mỗi 30s
+        timeout=300,  # Timeout 5 phút
+        
+        aws_conn_id='aws_default'
     )
 
-    # 2. Ghi một file dummy lên S3 (Kiểm tra quyền Write S3)
     write_to_s3 = S3CreateObjectOperator(
         task_id='write_test_to_s3',
         s3_bucket=S3_BUCKET,
