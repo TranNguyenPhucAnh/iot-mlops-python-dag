@@ -91,8 +91,8 @@ with DAG(
     write_to_s3 = S3CreateObjectOperator(
         task_id='write_test_to_s3',
         s3_bucket=S3_BUCKET,
-        s3_key='test/messages_{{ ts_nodash }}.json',
-        data='{{ ti.xcom_pull(task_ids="wait_for_iot_data", key="messages") | tojson }}',
+        s3_key='test/hello_from_airflow.txt',
+        data='Dữ liệu IoT giả lập từ Airflow Webserver',
         replace=True,
         aws_conn_id='aws_default'
     )
