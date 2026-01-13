@@ -78,7 +78,7 @@ with DAG(
         message_filtering_match_values=None,
         message_filtering_config=None,
         
-        delete_message_on_reception=True,
+        delete_message_on_reception=True, # SQSSensor xoá message khỏi queue ngay sau khi receive message
 
         wait_time_seconds=20, # sqs polling duration
         mode='reschedule',  # THÊM DÒNG NÀY: Giải phóng worker khi đang đợi
