@@ -73,9 +73,16 @@ with DAG(
         task_id='wait_for_iot_data',
         sqs_queue=SQS_QUEUE_URL,
         max_messages=1,
-        wait_time_seconds=15, # sqs polling duration
+        # ✅ KEY FIX: No filtering (đã test thành công!)
+        message_filtering=None,  # ← KHÔNG dùng 'literal'
+        message_filtering_match_values=None,
+        message_filtering_config=None,
+        
+        delete_message_on_reception=True,
+
+        wait_time_seconds=20, # sqs polling duration
         mode='reschedule',  # THÊM DÒNG NÀY: Giải phóng worker khi đang đợi
-        poke_interval=40,   # Cứ mỗi 40 giây gọi API polling 1 lần
+        poke_interval=45,   # Cứ mỗi 40 giây gọi API polling 1 lần
         timeout=600,        # Thời gian tối đa cho cả task là 10 phút
         aws_conn_id='aws_default' # Airflow sẽ tự dùng IRSA nếu connection này để trống
     )
@@ -84,8 +91,8 @@ with DAG(
     write_to_s3 = S3CreateObjectOperator(
         task_id='write_test_to_s3',
         s3_bucket=S3_BUCKET,
-        s3_key='test/hello_from_airflow.txt',
-        data='Dữ liệu IoT giả lập từ Airflow Webserver',
+        s3_key='test/messages_{{ ts_nodash }}.json',
+        data='{{ ti.xcom_pull(task_ids="wait_for_iot_data", key="messages") | tojson }}',
         replace=True,
         aws_conn_id='aws_default'
     )
