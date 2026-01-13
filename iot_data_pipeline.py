@@ -49,7 +49,8 @@ with DAG(
         s3_key='test/hello_from_airflow.txt',
         data='Dữ liệu IoT giả lập từ Airflow Webserver',
         replace=True,
-        aws_conn_id='aws_default'
+        aws_conn_id='aws_default',
+        execution_timeout=timedelta(minutes=2) # Ép Airflow phải kết thúc task
     )
 
     wait_for_message >> write_to_s3
