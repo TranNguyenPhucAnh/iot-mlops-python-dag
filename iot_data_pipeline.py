@@ -50,6 +50,10 @@ with DAG(
         data='Dữ liệu IoT giả lập từ Airflow Webserver',
         replace=True,
         aws_conn_id='aws_default',
+        # ✅ KEY FIX: Thêm config cho boto3
+        verify=True,  # Tắt SSL verify nếu có vấn đề cert
+        retries=2,
+        retry_delay=timedelta(seconds=30),
         execution_timeout=timedelta(minutes=2) # Ép Airflow phải kết thúc task
     )
 
