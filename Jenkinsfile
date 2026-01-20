@@ -34,12 +34,9 @@ spec:
             steps {
                 container('python') {
                     sh '''
-                    pip install apache-airflow==3.0.2 # Hoặc version bạn đang dùng
-                    pip install pytest
-                    # Chạy pytest từ thư mục gốc, tránh quét trúng file pytest
-                    export PYTHONPATH=$PYTHONPATH:.
-                    # Lệnh test: Kiểm tra xem các file DAG có lỗi cú pháp hay import lỗi không
-                    python -m pytest tests/test_dag_integrity.py
+                    pip install -r requirements.txt \
+                        --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.0.2/constraints-3.12.txt"
+                    pytest tests/test_dag_integrity.py -v
                     '''
                 }
             }
