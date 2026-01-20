@@ -1,4 +1,4 @@
 apache-airflow==3.0.2
 apache-airflow-providers-amazon>=8.21.0
-apache-airflow-providers-sqs  # Nếu dùng SQS
+apache-airflow-providers-sqs>=9.16.0 # Nếu dùng SQS
 pytest>=7.0
