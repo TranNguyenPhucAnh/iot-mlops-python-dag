@@ -8,20 +8,12 @@ spec:
   containers:
   - name: python
     image: python:3.11-slim
-    resources:
-      requests:
-        cpu: "200m"
-        memory: "256Mi"
     command: ["cat"]
     tty: true
   - name: docker
     image: docker:24.0.5-dind
     securityContext:
       privileged: true
-    resources:
-      requests:
-        cpu: "200m"
-        memory: "512Mi"
 '''
         }
     }
