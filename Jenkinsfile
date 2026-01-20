@@ -6,14 +6,33 @@ apiVersion: v1
 kind: Pod
 spec:
   containers:
-  - name: python
-    image: python:3.11-slim
-    command: ["cat"]
+  # ✅ JNLP container BẮT BUỘC (Jenkins agent)
+  - name: jnlp
+    image: jenkins/inbound-agent:latest
     tty: true
+  # ✅ Python container cho pytest
+  - name: python
+    image: python:3.12-slim
+    command: ["/bin/sh"]
+    tty: true
+    volumeMounts:
+    - name: pip-cache
+      mountPath: /root/.cache/pip
+  # ✅ Docker DIND (privileged đúng cách)
   - name: docker
     image: docker:24.0.5-dind
     securityContext:
-      privileged: true
+      privileged: true  # ✅ Cần cho Docker daemon
+    tty: true
+    volumeMounts:
+    - name: docker-sock  # Optional: host Docker
+      mountPath: /var/run/docker.sock
+  volumes:
+  - name: pip-cache
+    emptyDir: {}
+  - name: docker-sock
+    hostPath:
+      path: /var/run/docker.sock
 '''
         }
     }
