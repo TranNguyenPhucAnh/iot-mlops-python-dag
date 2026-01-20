@@ -2,11 +2,12 @@ pipeline {
     agent {
         kubernetes {
             yaml '''
+# Kubernetes Pod Template: Định nghĩa Pod structure cho Jenkins Kubernetes agent (có khi cài đặt Jenkins Kubernetes Plugin)
 apiVersion: v1
 kind: Pod
 spec:
   containers:
-  # ✅ JNLP container BẮT BUỘC (Jenkins agent)
+  # ✅ JNLP container (Jenkins agent)
   - name: jnlp
     image: jenkins/inbound-agent:latest
     tty: true
@@ -18,11 +19,11 @@ spec:
     volumeMounts:
     - name: pip-cache
       mountPath: /root/.cache/pip
-  # ✅ Docker DIND (privileged đúng cách)
+  # ✅ Docker DIND chạy command docker build, docker push trong pipeline (privileged đúng cách)
   - name: docker
     image: docker:24.0.5-dind
     securityContext:
-      privileged: true  # ✅ Cần cho Docker daemon
+      privileged: true  # ✅ Container chạy FULL Docker daemon
     tty: true
     volumeMounts:
     - name: docker-sock  # Optional: host Docker
