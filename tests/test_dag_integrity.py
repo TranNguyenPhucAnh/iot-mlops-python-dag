@@ -8,5 +8,6 @@ def test_dag_loaded_with_no_errors():
 
 def test_dag_ids_present():
     dag_bag = DagBag(dag_folder=".", include_examples=False)
-    # Kiểm tra xem có đúng cái DAG iot_sqs_to_s3_test không
-    assert "iot_sqs_to_s3_test" in dag_bag.dag_ids
+    expected_dags = ["iot_sqs_to_s3_test", "iot_data_pipeline"]  # Match file names
+    for dag_id in expected_dags:
+        assert dag_id in dag_bag.dag_ids, f"Missing DAG: {dag_id}"
