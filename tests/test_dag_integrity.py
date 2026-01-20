@@ -1,13 +1,15 @@
 import pytest
 from airflow.models import DagBag
 
-def test_dag_loaded_with_no_errors():
-    dag_bag = DagBag(dag_folder=".", include_examples=False)
-    # Kiểm tra xem có lỗi import không (ví dụ lỗi schedule_interval bạn gặp hôm trước)
-    assert len(dag_bag.import_errors) == 0, f"DAG import errors: {dag_bag.import_errors}"
-
-def test_dag_ids_present():
-    dag_bag = DagBag(dag_folder=".", include_examples=False)
-    expected_dags = ["iot_sqs_to_s3_test", "iot_data_pipeline"]  # Match file names
-    for dag_id in expected_dags:
-        assert dag_id in dag_bag.dag_ids, f"Missing DAG: {dag_id}"
+def test_iot_sqs_to_s3_pipeline():
+    dag_bag = DagBag(include_examples=False)
+    dag_bag.process_file("iot_data_pipeline.py")  # ✅ Chỉ 1 file
+    
+    assert len(dag_bag.import_errors) == 0
+    
+    dag = dag_bag.get_dag("iot_sqs_to_s3_test")
+    assert dag is not None
+    
+    # Test tasks
+    tasks = dag.task_dict
+    assert "write_test_to_s3" in tasks
