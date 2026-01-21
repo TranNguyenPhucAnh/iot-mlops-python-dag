@@ -6,7 +6,6 @@ pipeline {
 apiVersion: v1
 kind: Pod
 spec:
-  serviceAccountName: jenkins-sa
   containers:
   # ✅ JNLP container (Jenkins agent)
   - name: jnlp
