@@ -6,6 +6,7 @@ pipeline {
 apiVersion: v1
 kind: Pod
 spec:
+  serviceAccountName: jenkins-sa
   containers:
   # ✅ JNLP container (Jenkins agent)
   - name: jnlp
@@ -76,6 +77,8 @@ spec:
                     script {
                         // 1. Cài đặt AWS CLI nhanh để thực hiện Login (nếu image docker:dind chưa có)
                         sh "apk add --no-cache aws-cli"
+                        
+                        sh "aws sts get-caller-identity" // Lệnh này sẽ in ra Role mà Pod đang thực sự dùng
 
                         // 2. Login vào AWS ECR dùng IAM Role (IRSA) đã gắn cho jenkins-sa
                         sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}"
