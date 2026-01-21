@@ -38,6 +38,7 @@ spec:
     emptyDir: {}
   - name: docker-graph-storage
     emptyDir: {}
+  #
   // - name: docker-sock
   //   hostPath:
   //     path: /var/run/docker.sock
@@ -72,7 +73,7 @@ spec:
     stage('Build & Push Docker Image') {
             when {
                 // Bạn có thể đổi 'main' thành 'master' tùy theo tên nhánh của bạn
-                expression { return env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master' }
+                expression { return env.BRANCH_NAME == 'main'}
             }
             steps {
                 container('docker') {
