@@ -45,19 +45,16 @@ spec:
 '''
         }
     }
-
     environment {
         AWS_REGION = "ap-southeast-1"
         ECR_REPO = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
     }
-
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
-
         stage('Unit Test DAGs') {
             steps {
                 container('python') {
@@ -69,25 +66,20 @@ spec:
                 }
             }
         }
-
     stage('Build & Push Docker Image') {
             steps {
                 container('docker') {
                     script {
                         // 1. Cài đặt AWS CLI nhanh để thực hiện Login (nếu image docker:dind chưa có)
                         sh "apk add --no-cache aws-cli"
-                        
                         sh "aws sts get-caller-identity" // Lệnh này sẽ in ra Role mà Pod đang thực sự dùng
-
                         // 2. Login vào AWS ECR dùng IAM Role (IRSA) đã gắn cho jenkins-sa
                         sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}"
-
                         // 3. Build image với tag là ID của commit để dễ truy vết (Rollback khi cần)
                         def imageTag = "commit-${env.GIT_COMMIT.take(7)}"
                         echo "Đang build image: ${ECR_REPO}:${imageTag}"
                         
                         sh "docker build -t ${ECR_REPO}:${imageTag} -t ${ECR_REPO}:latest ."
-
                         // 4. Push lên ECR
                         sh "docker push ${ECR_REPO}:${imageTag}"
                         sh "docker push ${ECR_REPO}:latest"
