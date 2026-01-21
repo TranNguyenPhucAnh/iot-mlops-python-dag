@@ -62,15 +62,31 @@ spec:
             }
         }
 
-        stage('Build & Push Docker Image (Optional)') {
+    stage('Build & Push Docker Image') {
             when {
-                expression { return env.BRANCH_NAME == 'main' }
+                // Bạn có thể đổi 'main' thành 'master' tùy theo tên nhánh của bạn
+                expression { return env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master' }
             }
             steps {
                 container('docker') {
                     script {
-                        echo "Phần này sẽ dùng để build Airflow Worker custom nếu bạn thêm thư viện mới"
-                        // sh "docker build -t ${ECR_REPO}:latest ."
+                        // 1. Cài đặt AWS CLI nhanh để thực hiện Login (nếu image docker:dind chưa có)
+                        sh "apk add --no-cache aws-cli"
+
+                        // 2. Login vào AWS ECR dùng IAM Role (IRSA) đã gắn cho jenkins-sa
+                        sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}"
+
+                        // 3. Build image với tag là ID của commit để dễ truy vết (Rollback khi cần)
+                        def imageTag = "commit-${env.GIT_COMMIT.take(7)}"
+                        echo "Đang build image: ${ECR_REPO}:${imageTag}"
+                        
+                        sh "docker build -t ${ECR_REPO}:${imageTag} -t ${ECR_REPO}:latest ."
+
+                        // 4. Push lên ECR
+                        sh "docker push ${ECR_REPO}:${imageTag}"
+                        sh "docker push ${ECR_REPO}:latest"
+                        
+                        echo "Đã push thành công image lên ECR: ${ECR_REPO}:${imageTag}"
                     }
                 }
             }
