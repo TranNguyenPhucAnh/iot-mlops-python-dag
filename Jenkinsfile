@@ -20,20 +20,20 @@ spec:
     - name: pip-cache
       mountPath: /root/.cache/pip
   # ✅ Docker DIND chạy command docker build, docker push trong pipeline (privileged đúng cách)
-  - name: docker
-    image: docker:24.0.5-dind
-    securityContext:
-      privileged: true  # ✅ Container chạy FULL Docker daemon
-    tty: true
-    volumeMounts:
-    - name: docker-sock  # Optional: host Docker
-      mountPath: /var/run/docker.sock
-  volumes:
-  - name: pip-cache
-    emptyDir: {}
-  - name: docker-sock
-    hostPath:
-      path: /var/run/docker.sock
+  // - name: docker
+  //   image: docker:24.0.5-dind
+  //   securityContext:
+  //     privileged: true  # ✅ Container chạy FULL Docker daemon
+  //   tty: true
+  //   volumeMounts:
+  //   - name: docker-sock  # Optional: host Docker
+  //     mountPath: /var/run/docker.sock
+  // volumes:
+  // - name: pip-cache
+  //   emptyDir: {}
+  // - name: docker-sock
+  //   hostPath:
+  //     path: /var/run/docker.sock
 '''
         }
     }
