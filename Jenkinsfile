@@ -6,6 +6,7 @@ pipeline {
 apiVersion: v1
 kind: Pod
 spec:
+  serviceAccountName: jenkins-sa
   containers:
   # ✅ JNLP container (Jenkins agent)
   - name: jnlp
@@ -74,6 +75,7 @@ spec:
             steps {
                 container('docker') {
                     script {
+                        sh "aws sts get-caller-identity" // Lệnh này sẽ in ra Role mà Pod đang thực sự dùng
                         // 1. Cài đặt AWS CLI nhanh để thực hiện Login (nếu image docker:dind chưa có)
                         sh "apk add --no-cache aws-cli"
 
