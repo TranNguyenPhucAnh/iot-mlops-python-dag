@@ -25,15 +25,22 @@ spec:
     securityContext:
       privileged: true  # ✅ Container chạy FULL Docker daemon
     tty: true
+    args:
+      - --host=unix:///var/run/docker.sock
+    // volumeMounts:
+    // - name: docker-sock  # Optional: host Docker
+    //   mountPath: /var/run/docker.sock
     volumeMounts:
-    - name: docker-sock  # Optional: host Docker
-      mountPath: /var/run/docker.sock
+      - name: docker-graph-storage
+        mountPath: /var/lib/docker
   volumes:
   - name: pip-cache
     emptyDir: {}
-  - name: docker-sock
-    hostPath:
-      path: /var/run/docker.sock
+  - name: docker-graph-storage
+    emptyDir: {}
+  // - name: docker-sock
+  //   hostPath:
+  //     path: /var/run/docker.sock
 '''
         }
     }
