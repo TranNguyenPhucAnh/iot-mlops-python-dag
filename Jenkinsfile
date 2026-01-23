@@ -6,7 +6,7 @@ pipeline {
 apiVersion: v1
 kind: Pod
 spec:
-  serviceAccountName: jenkins-sa
+  serviceAccountName: jenkins-sa # chung SA mà controller pod đang dùng
   containers:
   # ✅ JNLP container (Jenkins agent)
   - name: jnlp
