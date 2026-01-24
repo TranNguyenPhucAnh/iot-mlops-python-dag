@@ -102,7 +102,7 @@ def process_iot_data(**context):
     
         wait_for_sqs = SqsSensor(
             task_id='wait_for_sqs_messages',
-            sqs_queue_url=SQS_QUEUE_URL,
+            sqs_queue=SQS_QUEUE_URL,
             max_messages=50,           # Tăng batch
             wait_time_seconds=30,      # Poke nhanh hơn
             timeout=300,               # 5 phút max wait
