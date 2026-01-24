@@ -86,3 +86,33 @@ def process_iot_data(**context):
     sqs_hook.delete_messages(SQS_QUEUE_URL, receipt_handles)
     
     logger.info(f"Saved {len(df)} records to s3://{S3_BUCKET}/{s3_path}")
+    
+    with DAG(
+        dag_id='iot_bme680_ingestion_pipeline_v2',
+        start_date=datetime(2026, 1, 1),
+        schedule='*/5 * * * *',  # 5 phút (IoT real-time)
+        catchup=False,
+        max_active_runs=4,
+        default_args={
+            'retries': 2,
+            'retry_delay': timedelta(minutes=1),
+            'on_failure_callback': lambda context: print(f"DAG failed: {context['dag'].dag_id}")
+        }
+    ) as dag:
+    
+        wait_for_sqs = SqsSensor(
+            task_id='wait_for_sqs_messages',
+            sqs_queue_url=SQS_QUEUE_URL,
+            max_messages=50,           # Tăng batch
+            wait_time_seconds=30,      # Poke nhanh hơn
+            timeout=300,               # 5 phút max wait
+            aws_conn_id=None           # IRSA
+        )
+    
+        process_data = PythonOperator(
+            task_id='transform_and_save_to_s3',
+            python_callable=process_iot_data,
+            pool='s3_pool'             # Rate limit S3 writes
+        )
+    
+        wait_for_sqs >> process_data
