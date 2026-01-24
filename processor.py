@@ -1,81 +1,88 @@
 from airflow import DAG
 from airflow.providers.amazon.aws.sensors.sqs import SqsSensor
+from airflow.providers.amazon.aws.hooks.sqs import SqsHook
 from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 import json
 import pandas as pd
 from datetime import datetime
 import io
+import logging
 
-# Cấu hình
+logger = logging.getLogger(__name__)
+
 SQS_QUEUE_URL = "https://sqs.ap-southeast-1.amazonaws.com/408279620390/iot-data-queue"
-S3_BUCKET = "iot-mlops-data-lake-408279620390"
+S3_BUCKET = "iot-bme680-data-lake-408279620390"
 
 def process_iot_data(**context):
-    # 1. Lấy dữ liệu từ SqsSensor (XCom)
+    """Process IoT messages from SQS → S3 Bronze Lake"""
+    # 1. Lấy messages từ SqsSensor XCom
     messages = context['ti'].xcom_pull(task_ids='wait_for_sqs_messages')
     
     if not messages:
-        print("Không có message nào để xử lý.")
+        logger.info("No SQS messages to process")
         return
 
     processed_records = []
     
     for msg in messages:
-        data = json.loads(msg['Body'])
-        
-        # 2. Logic Transformation: Tính toán IAQ cơ bản
-        # IAQ Score dựa trên Gas Resistance và Humidity (Công thức đơn giản hóa)
-        gas_res = data.get('gas_resistance', 0)
-        hum = data.get('humidity', 0)
-        
-        # IAQ đơn giản: Càng cao càng tốt (Trong thực tế Bosch dùng thuật toán phức tạp hơn)
-        iaq_score = (gas_res * 0.75) + (hum * 0.25) 
-        
-        data['iaq_score'] = round(iaq_score, 2)
-        data['processed_at'] = datetime.utcnow().isoformat()
-        processed_records.append(data)
+        try:
+            data = json.loads(msg['Body'])
+            
+            # Validation + defaults
+            required = ['temperature', 'humidity', 'pressure', 'gas_resistance']
+            if not all(data.get(k) for k in required):
+                logger.warning(f"Invalid message: {msg['Body'][:100]}...")
+                continue
+                
+            # 2. IAQ Score calculation (simplified Bosch formula)
+            gas_res = float(data.get('gas_resistance', 0))
+            hum = float(data.get('humidity', 0))
+            
+            iaq_score = max(0, min(500, (gas_res * 0.75) + (hum * 0.25)))  # 0-500 scale
+            
+            # Enriched record
+            enriched = data.copy()
+            enriched.update({
+                'iaq_score': round(iaq_score, 2),
+                'processed_at': datetime.utcnow().isoformat(),
+                'partition_key': datetime.utcnow().strftime('year=%Y/month=%m/day=%d/hour=%H')
+            })
+            processed_records.append(enriched)
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.error(f"Parse error: {e}, msg: {msg['Body'][:100]}...")
 
-    # 3. Chuyển thành DataFrame và nén thành Parquet
+    if not processed_records:
+        logger.warning("No valid records after processing")
+        return
+
+    # 3. DataFrame + Parquet
     df = pd.DataFrame(processed_records)
-    
-    # Tạo đường dẫn S3 theo Partition: year/month/day/hour
-    now = datetime.utcnow()
-    s3_path = f"bronze/bme680/{now.strftime('year=%Y/month=%m/day=%d')}/data_{now.strftime('%H%M%S')}.parquet"
+    logger.info(f"Processing {len(df)} valid records")
 
-    # Ghi file Parquet vào memory buffer
+    # Partition path
+    now = datetime.utcnow()
+    s3_path = f"bronze/bme680/year={now.year}/month={now.month:02d}/day={now.day:02d}/data_{now.strftime('%H%M%S')}.parquet"
+
+    # Memory buffer Parquet
     buffer = io.BytesIO()
-    df.to_parquet(buffer, index=False, engine='fastparquet')
+    df.to_parquet(buffer, index=False, engine='pyarrow', compression='snappy')  # pyarrow nhanh hơn
     
-    # 4. Upload lên S3 dùng S3Hook
-    s3_hook = S3Hook(aws_conn_id='aws_default')
+    buffer.seek(0)
+
+    # 4. S3 upload + delete SQS messages
+    s3_hook = S3Hook(aws_conn_id=None)  # IRSA
     s3_hook.load_file_obj(
         file_obj=buffer,
         key=s3_path,
         bucket_name=S3_BUCKET,
         replace=True
     )
-    print(f"Đã lưu {len(processed_records)} bản ghi vào: {s3_path}")
-
-with DAG(
-    dag_id='iot_bme680_ingestion_pipeline',
-    start_date=datetime(2026, 1, 1),
-    schedule='@hourly', # Gom dữ liệu mỗi giờ
-    catchup=False
-) as dag:
-
-    # Đợi và lấy tối đa 10 messages từ SQS
-    wait_for_sqs = SqsSensor(
-        task_id='wait_for_sqs_messages',
-        sqs_queue_url=SQS_QUEUE_URL,
-        max_messages=10,
-        wait_time_seconds=20,
-        aws_conn_id='aws_default'
-    )
-
-    process_data = PythonOperator(
-        task_id='transform_and_save_to_s3',
-        python_callable=process_iot_data
-    )
-
-    wait_for_sqs >> process_data
+    
+    # ✅ CRITICAL: Delete processed messages (SqsSensor KHÔNG auto-delete)
+    sqs_hook = SqsHook(aws_conn_id=None)
+    receipt_handles = [msg['ReceiptHandle'] for msg in messages]
+    sqs_hook.delete_messages(SQS_QUEUE_URL, receipt_handles)
+    
+    logger.info(f"Saved {len(df)} records to s3://{S3_BUCKET}/{s3_path}")
