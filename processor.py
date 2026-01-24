@@ -60,7 +60,7 @@ def process_iot_data(**context):
 with DAG(
     dag_id='iot_bme680_ingestion_pipeline',
     start_date=datetime(2026, 1, 1),
-    schedule_interval='@hourly', # Gom dữ liệu mỗi giờ
+    schedule='@hourly', # Gom dữ liệu mỗi giờ
     catchup=False
 ) as dag:
 
