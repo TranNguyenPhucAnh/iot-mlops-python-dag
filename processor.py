@@ -11,8 +11,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-SQS_QUEUE_URL = "https://sqs.ap-southeast-1.amazonaws.com/408279620390/iot-data-queue"
-S3_BUCKET = "iot-bme680-data-lake-408279620390"
+SQS_QUEUE_URL = "https://sqs.ap-southeast-1.amazonaws.com/408279620390/bme680-sensor-data"
+S3_BUCKET = "iot-bme680-data-lake-prod"
 
 def process_iot_data(**context):
     """Process IoT messages from SQS → S3 Bronze Lake"""
