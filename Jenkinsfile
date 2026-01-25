@@ -28,9 +28,6 @@ spec:
     tty: true
     args:
       - --host=unix:///var/run/docker.sock
-    // volumeMounts:
-    // - name: docker-sock  # Optional: host Docker
-    //   mountPath: /var/run/docker.sock
     volumeMounts:
       - name: docker-graph-storage
         mountPath: /var/lib/docker
@@ -39,16 +36,12 @@ spec:
     emptyDir: {}
   - name: docker-graph-storage
     emptyDir: {}
-  #
-  // - name: docker-sock
-  //   hostPath:
-  //     path: /var/run/docker.sock
 '''
         }
     }
     environment {
         AWS_REGION = "ap-southeast-1"
-        ECR_REPO = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
+        ECR_REPO = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-mlops-repo"
     }
     stages {
         stage('Checkout') {
