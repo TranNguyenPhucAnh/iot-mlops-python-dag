@@ -104,6 +104,8 @@ with DAG(
     wait_for_sqs = SqsSensor(
         task_id='wait_for_sqs_messages',
         sqs_queue=SQS_QUEUE_URL,
+        poke_interval=20,
+        mode='reschedule',
         max_messages=50,           # Tăng batch
         wait_time_seconds=30,      # Poke nhanh hơn
         timeout=300,               # 5 phút max wait
