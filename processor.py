@@ -106,7 +106,7 @@ with DAG(
         sqs_queue=SQS_QUEUE_URL,
         poke_interval=20,
         mode='reschedule',
-        max_messages=50,           # Tăng batch
+        max_messages=5,           # Tăng batch
         wait_time_seconds=30,      # Poke nhanh hơn
         timeout=300,               # 5 phút max wait
         aws_conn_id='aws_default',           # IRSA
