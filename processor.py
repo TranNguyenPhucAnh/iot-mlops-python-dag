@@ -116,24 +116,32 @@ def pull_and_process_sqs(**context):
                 logger.info(f"Sample parsed data: {data}")
                 logger.info(f"Data keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
             
-            # Validate required fields
-            required = ['temperature', 'humidity', 'pressure', 'gas_resistance']
-            
             if not isinstance(data, dict):
                 invalid_count += 1
                 logger.warning(f"Message {idx} is not a dict: {type(data)}")
                 continue
             
-            missing = [k for k in required if k not in data or data[k] is None]
+            # Extract sensor data from nested 'sensors' field
+            sensor_data = data.get('sensors', data)  # Fallback to data if no 'sensors' field
+            
+            if not isinstance(sensor_data, dict):
+                invalid_count += 1
+                logger.warning(f"Message {idx}: 'sensors' field is not a dict")
+                continue
+            
+            # Validate required fields
+            required = ['temperature', 'humidity', 'pressure', 'gas_resistance']
+            missing = [k for k in required if k not in sensor_data or sensor_data[k] is None]
+            
             if missing:
                 invalid_count += 1
                 logger.warning(f"Message {idx} missing fields: {missing}")
-                logger.debug(f"Available keys: {list(data.keys())}")
+                logger.debug(f"Available keys in sensors: {list(sensor_data.keys())}")
                 continue
             
             # Calculate IAQ Score (simplified)
-            gas_res = float(data['gas_resistance'])
-            hum = float(data['humidity'])
+            gas_res = float(sensor_data['gas_resistance'])
+            hum = float(sensor_data['humidity'])
             
             # Normalize IAQ calculation
             gas_baseline = 50000
@@ -151,13 +159,19 @@ def pull_and_process_sqs(**context):
             
             iaq_score = min(500, gas_score + hum_score)
             
-            # Enrich data
-            enriched = data.copy()
-            enriched.update({
+            # Enrich data - merge sensor data with metadata
+            enriched = {
+                'timestamp': data.get('timestamp'),
+                'device_id': data.get('device_id'),
+                'version': data.get('version'),
+                'temperature': sensor_data['temperature'],
+                'humidity': sensor_data['humidity'],
+                'pressure': sensor_data['pressure'],
+                'gas_resistance': sensor_data['gas_resistance'],
                 'iaq_score': round(iaq_score, 2),
                 'processed_at': datetime.utcnow().isoformat(),
                 'partition_key': datetime.utcnow().strftime('year=%Y/month=%m/day=%d/hour=%H')
-            })
+            }
             processed_records.append(enriched)
             
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
