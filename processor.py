@@ -73,7 +73,7 @@ def process_iot_data(**context):
     buffer.seek(0)
 
     # 4. S3 upload + delete SQS messages
-    s3_hook = S3Hook(aws_conn_id=None)  # IRSA
+    s3_hook = S3Hook(aws_conn_id='aws_default')  # IRSA
     s3_hook.load_file_obj(
         file_obj=buffer,
         key=s3_path,
@@ -82,7 +82,7 @@ def process_iot_data(**context):
     )
     
     # ✅ CRITICAL: Delete processed messages (SqsSensor KHÔNG auto-delete)
-    sqs_hook = SqsHook(aws_conn_id=None)
+    sqs_hook = SqsHook(aws_conn_id='aws_default')
     receipt_handles = [msg['ReceiptHandle'] for msg in messages]
     sqs_hook.delete_messages(SQS_QUEUE_URL, receipt_handles)
     
@@ -107,7 +107,10 @@ with DAG(
         max_messages=50,           # Tăng batch
         wait_time_seconds=30,      # Poke nhanh hơn
         timeout=300,               # 5 phút max wait
-        aws_conn_id=None           # IRSA
+        aws_conn_id='aws_default',           # IRSA
+        message_filtering=None,
+        message_filtering_match_values=None,
+        message_filtering_config=None,
     )
 
     process_data = PythonOperator(
