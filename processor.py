@@ -17,32 +17,39 @@ S3_BUCKET = "iot-bme680-data-lake-prod"
 
 def process_iot_data(**context):
     """Process IoT messages from SQS → S3 Bronze Lake"""
-    # 1. Lấy messages từ SqsSensor XCom
     messages = context['ti'].xcom_pull(task_ids='wait_for_sqs_messages')
     
+    # ✅ THÊM: Debug XCom
+    logger.info(f"XCom messages type: {type(messages)}")
+    logger.info(f"XCom messages length: {len(messages) if messages else 0}")
+    logger.info(f"XCom messages preview: {messages[:2] if messages else 'None'}")
+    
     if not messages:
-        logger.info("No SQS messages to process")
+        logger.warning("No SQS messages to process - XCom returned None/empty")
         return
 
     processed_records = []
+    invalid_count = 0
     
-    for msg in messages:
+    for idx, msg in enumerate(messages):
         try:
+            # ✅ THÊM: Log raw message
+            logger.info(f"Processing message {idx}: {msg['Body'][:200]}")
+            
             data = json.loads(msg['Body'])
             
-            # Validation + defaults
             required = ['temperature', 'humidity', 'pressure', 'gas_resistance']
             if not all(data.get(k) for k in required):
-                logger.warning(f"Invalid message: {msg['Body'][:100]}...")
+                invalid_count += 1
+                logger.warning(f"Invalid message {idx} - missing fields: {[k for k in required if not data.get(k)]}")
                 continue
                 
-            # 2. IAQ Score calculation (simplified Bosch formula)
+            # IAQ calculation...
             gas_res = float(data.get('gas_resistance', 0))
             hum = float(data.get('humidity', 0))
             
-            iaq_score = max(0, min(500, (gas_res * 0.75) + (hum * 0.25)))  # 0-500 scale
+            iaq_score = max(0, min(500, (gas_res * 0.75) + (hum * 0.25)))
             
-            # Enriched record
             enriched = data.copy()
             enriched.update({
                 'iaq_score': round(iaq_score, 2),
@@ -52,41 +59,53 @@ def process_iot_data(**context):
             processed_records.append(enriched)
             
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.error(f"Parse error: {e}, msg: {msg['Body'][:100]}...")
+            invalid_count += 1
+            logger.error(f"Parse error on message {idx}: {e}, body: {msg.get('Body', 'N/A')[:200]}")
+
+    # ✅ THÊM: Summary
+    logger.info(f"Processing summary: {len(processed_records)} valid, {invalid_count} invalid out of {len(messages)} total")
 
     if not processed_records:
-        logger.warning("No valid records after processing")
+        logger.warning("No valid records after processing - all messages rejected")
         return
 
-    # 3. DataFrame + Parquet
+    # DataFrame + S3 upload
     df = pd.DataFrame(processed_records)
-    logger.info(f"Processing {len(df)} valid records")
+    logger.info(f"DataFrame created with {len(df)} rows, columns: {df.columns.tolist()}")
 
-    # Partition path
     now = datetime.utcnow()
     s3_path = f"bronze/bme680/year={now.year}/month={now.month:02d}/day={now.day:02d}/data_{now.strftime('%H%M%S')}.parquet"
+    
+    # ✅ THÊM: Log S3 path
+    logger.info(f"Target S3 path: s3://{S3_BUCKET}/{s3_path}")
 
-    # Memory buffer Parquet
-    buffer = io.BytesIO()
-    df.to_parquet(buffer, index=False, engine='pyarrow', compression='snappy')  # pyarrow nhanh hơn
-    
-    buffer.seek(0)
+    try:
+        buffer = io.BytesIO()
+        df.to_parquet(buffer, index=False, engine='pyarrow', compression='snappy')
+        buffer.seek(0)
+        
+        # ✅ THÊM: Log buffer size
+        logger.info(f"Parquet buffer size: {len(buffer.getvalue())} bytes")
 
-    # 4. S3 upload + delete SQS messages
-    s3_hook = S3Hook(aws_conn_id='aws_default')  # IRSA
-    s3_hook.load_file_obj(
-        file_obj=buffer,
-        key=s3_path,
-        bucket_name=S3_BUCKET,
-        replace=True
-    )
-    
-    # ✅ CRITICAL: Delete processed messages (SqsSensor KHÔNG auto-delete)
-    sqs_hook = SqsHook(aws_conn_id='aws_default')
-    receipt_handles = [msg['ReceiptHandle'] for msg in messages]
-    sqs_hook.delete_messages(SQS_QUEUE_URL, receipt_handles)
-    
-    logger.info(f"Saved {len(df)} records to s3://{S3_BUCKET}/{s3_path}")
+        s3_hook = S3Hook(aws_conn_id='aws_default')
+        s3_hook.load_file_obj(
+            file_obj=buffer,
+            key=s3_path,
+            bucket_name=S3_BUCKET,
+            replace=True
+        )
+        
+        logger.info(f"✅ Successfully saved {len(df)} records to s3://{S3_BUCKET}/{s3_path}")
+        
+        # Delete SQS messages
+        sqs_hook = SqsHook(aws_conn_id='aws_default')
+        receipt_handles = [msg['ReceiptHandle'] for msg in messages]
+        sqs_hook.delete_messages(SQS_QUEUE_URL, receipt_handles)
+        logger.info(f"✅ Deleted {len(receipt_handles)} messages from SQS")
+        
+    except Exception as e:
+        logger.error(f"❌ S3 upload failed: {e}", exc_info=True)
+        raise
     
 with DAG(
     dag_id='iot_bme680_ingestion_pipeline_v2',
