@@ -125,10 +125,11 @@ with DAG(
         sqs_queue=SQS_QUEUE_URL,
         poke_interval=20,
         mode='reschedule',
-        max_messages=5,           # Tăng batch
-        wait_time_seconds=10,      # Poke nhanh hơn
+        max_messages=5,            # Tăng batch
+        wait_time_seconds=20,      # Poke nhanh hơn
         timeout=300,               # 5 phút max wait
-        aws_conn_id='aws_default',           # IRSA
+        aws_conn_id='aws_default', # IRSA
+        return_value=True,         # By default, SqsSensor does not return the messages. Set return_value=True to push messages to XCom
         message_filtering=None,
         message_filtering_match_values=None,
         message_filtering_config=None,
