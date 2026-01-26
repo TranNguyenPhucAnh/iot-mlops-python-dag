@@ -118,7 +118,7 @@ with DAG(
     process_data = PythonOperator(
         task_id='transform_and_save_to_s3',
         python_callable=process_iot_data,
-        pool='s3_pool'             # Rate limit S3 writes
+        #pool='s3_pool'             # Rate limit S3 writes
     )
 
     wait_for_sqs >> process_data
