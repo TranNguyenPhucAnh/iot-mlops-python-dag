@@ -81,7 +81,7 @@ def pull_and_process_sqs(**context):
         response = sqs_hook.get_conn().receive_message(
             QueueUrl=SQS_QUEUE_URL,
             MaxNumberOfMessages=10,
-            WaitTimeSeconds=5,  # Reduced from 20 for faster batching
+            WaitTimeSeconds=20,
             VisibilityTimeout=300
         )
         
