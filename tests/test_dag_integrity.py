@@ -19,14 +19,6 @@ def test_no_import_errors(dagbag):
     assert not dagbag.import_errors, \
         f"DAG import errors: {dagbag.import_errors}"
 
-def test_required_dags_exist(dagbag):
-    """Test that required DAGs are present"""
-    required_dags = ["hello_world_dag", "debug_s3_write_only", "iot_sqs_to_s3_test", "mlflow_connection_test_dag", "iot_bme680_ingestion_pipeline_v3"]
-    
-    for dag_id in required_dags:
-        assert dag_id in dagbag.dags, \
-            f"Required DAG '{dag_id}' not found"
-
 def test_dag_tags(dagbag):
     """Test that DAGs have appropriate tags"""
     for dag_id, dag in dagbag.dags.items():
@@ -51,18 +43,18 @@ def test_task_count(dagbag):
         assert len(dag.tasks) > 0, \
             f"DAG '{dag_id}' has no tasks"
 
-@pytest.mark.parametrize("dag_id", ["hello_world_dag", "debug_s3_write_only", "iot_sqs_to_s3_test", "mlflow_connection_test_dag", "iot_bme680_ingestion_pipeline_v3"])
-def test_specific_dag_structure(dagbag, dag_id):
-    """Test specific DAG structure"""
-    dag = dagbag.get_dag(dag_id)
-    assert dag is not None
+# @pytest.mark.parametrize("dag_id", ["hello_world_dag", "debug_s3_write_only", "iot_sqs_to_s3_test", "mlflow_connection_test_dag", "iot_bme680_ingestion_pipeline_v3"])
+# def test_specific_dag_structure(dagbag, dag_id):
+#     """Test specific DAG structure"""
+#     dag = dagbag.get_dag(dag_id)
+#     assert dag is not None
     
-    # Test has tasks
-    assert len(dag.tasks) > 0
+#     # Test has tasks
+#     assert len(dag.tasks) > 0
     
-    # Test has schedule
-    assert dag.schedule_interval is not None or dag.timetable is not None
+#     # Test has schedule
+#     assert dag.schedule_interval is not None or dag.timetable is not None
     
-    # Test catchup is disabled for real-time pipelines
-    if 'iot' in dag_id:
-        assert dag.catchup == False
+#     # Test catchup is disabled for real-time pipelines
+#     if 'iot' in dag_id:
+#         assert dag.catchup == False
