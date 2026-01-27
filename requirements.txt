@@ -1,7 +1,26 @@
+# ============================================
+# Airflow Core & Providers
+# ============================================
 apache-airflow==3.0.2
 apache-airflow-providers-amazon>=8.21.0
-pytest>=7.0
-boto3==1.37.3
-psycopg2-binary==2.9.10
-requests==2.32.3
+apache-airflow-providers-postgres>=5.10.0
+
+# ============================================
+# MLflow & ML Tools
+# ============================================
 mlflow
+requests
+boto3
+psycopg2-binary
+
+# ============================================
+# Data Processing
+# ============================================
+pandas
+pyarrow
+
+# ============================================
+# Testing (dev dependencies)
+# ============================================
+pytest>=8.0.0
+pytest-cov>=4.1.0
