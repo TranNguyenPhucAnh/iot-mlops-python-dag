@@ -54,7 +54,7 @@ spec:
     environment {
         AWS_REGION = "ap-southeast-1"
         ECR_REGISTRY = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com"
-        ECR_REPO = "airflow-mlflow"
+        ECR_REPO = "iot-mlops-repo"
         IMAGE_NAME = "${ECR_REGISTRY}/${ECR_REPO}"
         
         // Versioning
