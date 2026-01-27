@@ -21,10 +21,7 @@ def test_no_import_errors(dagbag):
 
 def test_required_dags_exist(dagbag):
     """Test that required DAGs are present"""
-    required_dags = [
-        'iot_bme680_ingestion_pipeline_v3',
-        'mlflow_connection_test_dag'
-    ]
+    required_dags = ["hello_world_dag", "debug_s3_write_only", "iot_sqs_to_s3_test", "mlflow_connection_test_dag", "iot_bme680_ingestion_pipeline_v3"]
     
     for dag_id in required_dags:
         assert dag_id in dagbag.dags, \
@@ -54,10 +51,7 @@ def test_task_count(dagbag):
         assert len(dag.tasks) > 0, \
             f"DAG '{dag_id}' has no tasks"
 
-@pytest.mark.parametrize("dag_id", [
-    'iot_bme680_ingestion_pipeline_v3',
-    'mlflow_connection_test_dag'
-])
+@pytest.mark.parametrize("dag_id", ["hello_world_dag", "debug_s3_write_only", "iot_sqs_to_s3_test", "mlflow_connection_test_dag", "iot_bme680_ingestion_pipeline_v3"])
 def test_specific_dag_structure(dagbag, dag_id):
     """Test specific DAG structure"""
     dag = dagbag.get_dag(dag_id)
