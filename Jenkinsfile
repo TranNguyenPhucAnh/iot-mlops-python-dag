@@ -112,53 +112,60 @@ spec:
         stage('Build Docker Image') {
             steps {
                 container('docker') {
-                    script {
-                        echo "=== Building Docker image ==="
-                        
-                        // Image tags
-                        def tags = [
-                            "${IMAGE_NAME}:${GIT_SHORT_COMMIT}",
-                            "${IMAGE_NAME}:${AIRFLOW_VERSION}-${GIT_SHORT_COMMIT}",
-                            "${IMAGE_NAME}:latest"
-                        ]
-                        
-                        // Build with cache and labels
-                        sh """
-                        docker build \
-                            --build-arg AIRFLOW_VERSION=${AIRFLOW_VERSION} \
-                            --build-arg BUILD_DATE='${BUILD_DATE}' \
-                            --build-arg VCS_REF=${GIT_SHORT_COMMIT} \
-                            --label "org.opencontainers.image.created=${BUILD_DATE}" \
-                            --label "org.opencontainers.image.version=${AIRFLOW_VERSION}-${GIT_SHORT_COMMIT}" \
-                            --label "org.opencontainers.image.revision=${env.GIT_COMMIT}" \
-                            --label "org.opencontainers.image.source=${env.GIT_URL}" \
-                            ${tags.collect { "-t $it" }.join(' ')} \
-                            -f docker/Dockerfile \
-                            .
-                        """
-                        
-                        // Test image
-                        echo "=== Testing built image ==="
-                        sh """
-                        docker run --rm ${IMAGE_NAME}:${GIT_SHORT_COMMIT} \
-                            python -c "
-import sys
-import mlflow
-import boto3
-import psycopg2
-from airflow.providers.amazon.aws.hooks.sqs import SqsHook
-
-print('✅ Python version:', sys.version)
-print('✅ MLflow version:', mlflow.__version__)
-print('✅ Boto3 version:', boto3.__version__)
-print('✅ Psycopg2 installed')
-print('✅ Airflow AWS providers installed')
-print('🎉 All dependencies validated!')
-"
-                        """
-                        
-                        // Store tags for next stages
-                        env.IMAGE_TAGS = tags.join(' ')
+                    withEnv(['DOCKER_HOST=unix:///var/run/docker.sock']) {
+                        script {
+                            echo "=== Wait for Docker Daemon ==="
+                            // Đợi 5 giây để Docker Daemon (DIND) thực sự sẵn sàng
+                            sh "sleep 5" 
+                            sh "docker version" // Lệnh kiểm tra sức khỏe
+    
+                            echo "=== Building Docker image ==="
+                            
+                            // Image tags
+                            def tags = [
+                                "${IMAGE_NAME}:${GIT_SHORT_COMMIT}",
+                                "${IMAGE_NAME}:${AIRFLOW_VERSION}-${GIT_SHORT_COMMIT}",
+                                "${IMAGE_NAME}:latest"
+                            ]
+                            
+                            // Build with cache and labels
+                            sh """
+                            docker build \
+                                --build-arg AIRFLOW_VERSION=${AIRFLOW_VERSION} \
+                                --build-arg BUILD_DATE='${BUILD_DATE}' \
+                                --build-arg VCS_REF=${GIT_SHORT_COMMIT} \
+                                --label "org.opencontainers.image.created=${BUILD_DATE}" \
+                                --label "org.opencontainers.image.version=${AIRFLOW_VERSION}-${GIT_SHORT_COMMIT}" \
+                                --label "org.opencontainers.image.revision=${env.GIT_COMMIT}" \
+                                --label "org.opencontainers.image.source=${env.GIT_URL}" \
+                                ${tags.collect { "-t $it" }.join(' ')} \
+                                -f docker/Dockerfile \
+                                .
+                            """
+                            
+                            // Test image
+                            echo "=== Testing built image ==="
+                            sh """
+                            docker run --rm ${IMAGE_NAME}:${GIT_SHORT_COMMIT} \
+                                python -c "
+    import sys
+    import mlflow
+    import boto3
+    import psycopg2
+    from airflow.providers.amazon.aws.hooks.sqs import SqsHook
+    
+    print('✅ Python version:', sys.version)
+    print('✅ MLflow version:', mlflow.__version__)
+    print('✅ Boto3 version:', boto3.__version__)
+    print('✅ Psycopg2 installed')
+    print('✅ Airflow AWS providers installed')
+    print('🎉 All dependencies validated!')
+    "
+                            """
+                            
+                            // Store tags for next stages
+                            env.IMAGE_TAGS = tags.join(' ')
+                        }
                     }
                 }
             }
