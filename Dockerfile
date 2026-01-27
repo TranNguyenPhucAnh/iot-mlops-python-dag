@@ -62,33 +62,33 @@ RUN pip install --no-cache-dir \
 # ============================================
 # Verification
 # ============================================
-RUN python -c "
-import sys
-print('Python version:', sys.version)
+RUN python -c " \
+import sys \
+print('Python version:', sys.version) \
 
 # Verify critical imports
-import airflow
-print('✅ Airflow version:', airflow.__version__)
+import airflow \
+print('✅ Airflow version:', airflow.__version__) \
 
-import mlflow
-print('✅ MLflow version:', mlflow.__version__)
+import mlflow \
+print('✅ MLflow version:', mlflow.__version__) \
 
-import boto3
-print('✅ Boto3 version:', boto3.__version__)
+import boto3 \
+print('✅ Boto3 version:', boto3.__version__) \
 
-import psycopg2
-print('✅ Psycopg2 installed')
+import psycopg2 \
+print('✅ Psycopg2 installed') \
 
-from airflow.providers.amazon.aws.hooks.sqs import SqsHook
-print('✅ AWS providers installed')
+from airflow.providers.amazon.aws.hooks.sqs import SqsHook \
+print('✅ AWS providers installed') \
 
-try:
-    import bme680
-    print('✅ BME680 sensor library available')
-except ImportError:
-    print('ℹ️ BME680 not installed (optional)')
+try: \
+    import bme680 \
+    print('✅ BME680 sensor library available') \
+except ImportError: \
+    print('ℹ️ BME680 not installed (optional)') \
 
-print('🎉 All dependencies verified!')
+print('🎉 All dependencies verified!') \
 "
 
 # ============================================
