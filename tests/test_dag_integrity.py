@@ -8,6 +8,6 @@ def test_dag_loaded_with_no_errors():
 
 def test_dag_ids_present():
     dag_bag = DagBag(dag_folder=".", include_examples=False)
-    expected_dags = ["hello_world_dag","debug_s3_write_only","iot_sqs_to_s3_test"]  # Match file names
+    expected_dags = ["hello_world_dag","debug_s3_write_only","iot_sqs_to_s3_test", "mlflow_connection_test_dag", "iot_bme680_ingestion_pipeline_v3" ]  # Match file names
     for dag_id in expected_dags:
         assert dag_id in dag_bag.dag_ids, f"Missing DAG: {dag_id}"
