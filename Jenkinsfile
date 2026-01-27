@@ -15,6 +15,14 @@ spec:
     volumeMounts:
     - name: pip-cache
       mountPath: /root/.cache/pip
+  # ✅ Python container cho pytest
+  - name: python
+    image: python:3.12-slim
+    command: ["/bin/sh"]
+    tty: true
+    volumeMounts:
+    - name: pip-cache
+      mountPath: /root/.cache/pip
   # ✅ Docker DIND chạy command docker build, docker push trong pipeline (privileged đúng cách)
   - name: docker
     image: docker:24.0.5-dind
