@@ -6,12 +6,13 @@ pipeline {
 apiVersion: v1
 kind: Pod
 spec:
-  serviceAccountName: jenkins-sa
+  serviceAccountName: jenkins-sa  # chung SA mà controller pod đang dùng
+# ✅ JNLP container (Jenkins agent)
   containers:
   - name: jnlp
     image: jenkins/inbound-agent:latest
     tty: true
-  
+# ✅ Python container cho pytest
   - name: python
     image: python:3.12-slim
     command: ["/bin/sh"]
@@ -19,7 +20,7 @@ spec:
     volumeMounts:
     - name: pip-cache
       mountPath: /root/.cache/pip
-  
+# ✅ Docker DIND chạy command docker build, docker push trong pipeline (privileged đúng cách)
   - name: docker
     image: docker:24.0.5-dind
     securityContext:
@@ -30,20 +31,11 @@ spec:
     volumeMounts:
       - name: docker-graph-storage
         mountPath: /var/lib/docker
-      - name: docker-cache
-        mountPath: /var/cache/docker
-  
-  - name: trivy
-    image: aquasec/trivy:latest
-    command: ["/bin/sh"]
-    tty: true
   
   volumes:
   - name: pip-cache
     emptyDir: {}
   - name: docker-graph-storage
-    emptyDir: {}
-  - name: docker-cache
     emptyDir: {}
 '''
         }
