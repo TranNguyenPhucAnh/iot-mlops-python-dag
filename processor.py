@@ -208,7 +208,7 @@ def pull_and_process_sqs(**context):
         
         logger.info(f"✅ Saved {len(df)} records to s3://{S3_BUCKET}/{s3_path}")
         
-        # 4. Delete messages from SQS (only after S3 bucket success)
+        # 4. Delete messages from SQS (only after S3 success)
         receipt_handles = [msg['ReceiptHandle'] for msg in all_messages]
         delete_sqs_messages_batch(sqs_hook, receipt_handles)
         
