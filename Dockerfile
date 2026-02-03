@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
         -r /tmp/requirements.txt \
         --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
 
-# Bước Verification: Jenkins sẽ chạy cái này khi build để đảm bảo image "sạch"
+# Verification: Jenkins sẽ chạy cái này khi build để đảm bảo image "sạch"
 RUN python <<EOF
 import mlflow, boto3, psycopg2
 print(f'✅ MLflow version: {mlflow.__version__}')
