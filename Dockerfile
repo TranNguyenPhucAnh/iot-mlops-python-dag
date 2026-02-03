@@ -30,12 +30,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
         --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
 
 # Bước Verification: Jenkins sẽ chạy cái này khi build để đảm bảo image "sạch"
-RUN python -c "
+RUN python <<EOF
 import mlflow, boto3, psycopg2
-print('✅ MLflow version:', mlflow.__version__)
-print('✅ Boto3 version:', boto3.__version__)
+print(f'✅ MLflow version: {mlflow.__version__}')
+print(f'✅ Boto3 version: {boto3.__version__}')
 print('🎉 Verification Successful!')
-"
+EOF
 
 # Metadata cho Image
 LABEL maintainer="phucanhatt@gmail.com" \
