@@ -1,6 +1,6 @@
-# ============================================
+# =============================================
 # Airflow MLflow Image - Optimized for Jenkins DinD
-# ============================================
+# =============================================
 
 ARG AIRFLOW_VERSION=3.0.2
 FROM apache/airflow:${AIRFLOW_VERSION}-python3.12
