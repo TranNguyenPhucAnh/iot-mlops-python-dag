@@ -12,9 +12,9 @@ mlflow
 requests
 boto3
 psycopg2-binary
-scikit-learn==1.4.0
-matplotlib==3.8.2
-seaborn==0.13.1
+scikit-learn
+matplotlib
+seaborn
 
 # ============================================
 # Data Processing
