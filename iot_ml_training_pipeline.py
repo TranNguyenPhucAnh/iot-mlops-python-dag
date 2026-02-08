@@ -35,7 +35,7 @@ import joblib
 logger = logging.getLogger(__name__)
 
 # ==================== Configuration ====================
-MLFLOW_TRACKING_URI = "http://mlflow.mlflow.svc.cluster.local:5000"
+MLFLOW_TRACKING_URI = "http://mlflow.mlflow.svc.cluster.local:80"
 EXPERIMENT_NAME = "iot_bme680_anomaly_detection"
 S3_BUCKET = "iot-bme680-data-lake-prod"
 S3_BRONZE_PREFIX = "bronze/bme680/"
