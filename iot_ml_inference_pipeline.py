@@ -102,7 +102,8 @@ def load_recent_data(**context):
     logger.info("=" * 60)
     
     s3_hook = S3Hook(aws_conn_id='aws_default')
-    execution_date = context['execution_date']
+    # Airflow 3.0+: use logical_date instead of execution_date
+    execution_date = context.get('logical_date') or context.get('execution_date')
     
     # Look for data from last 15 minutes
     prefix = (
