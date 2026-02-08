@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 MLFLOW_TRACKING_URI = os.getenv(
     'MLFLOW_TRACKING_URI',
-    'http://mlflow.mlflow.svc.cluster.local:5000'
+    'http://mlflow.mlflow.svc.cluster.local:80'
 )
 EXPERIMENT_NAME = "iot_sensor_integration_test"
 
