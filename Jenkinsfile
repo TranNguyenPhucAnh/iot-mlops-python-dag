@@ -80,10 +80,10 @@ spec:
                         def imageTag = "commit-${env.GIT_COMMIT.take(7)}"
                         echo "Đang build image: ${ECR_REPO}:${imageTag}"
 
-                        sh "docker build -t ${ECR_REPO}:${imageTag} -t ${ECR_REPO}:latest ."
+                        sh "docker build -t ${ECR_REPO}:${imageTag} -t ${ECR_REPO} ."
                         // 4. Push lên ECR
                         sh "docker push ${ECR_REPO}:${imageTag}"
-                        sh "docker push ${ECR_REPO}:latest"
+                        sh "docker push ${ECR_REPO}"
 
                         echo "Đã push thành công image lên ECR: ${ECR_REPO}:${imageTag}"
                     }
