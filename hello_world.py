@@ -3,7 +3,7 @@ from airflow.operators.python import PythonOperator
 from datetime import datetime
 
 def print_hello():
-    return "Hello từ hệ thống IoT MLOps của Phúc Anh!"
+    return "Hello từ hệ thống IoT MLOps của Phúc Anh"
 
 with DAG(
     dag_id='hello_world_dag',
