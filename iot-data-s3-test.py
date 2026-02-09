@@ -30,7 +30,7 @@ with DAG(
 ) as dag:
     
     # ========================================
-    # TEST 1: S3CreateObjectOperator (Original)
+    # TEST 1: S3CreateObjectOperator
     # ========================================
     test_s3_operator = S3CreateObjectOperator(
         task_id='test_s3_operator',
