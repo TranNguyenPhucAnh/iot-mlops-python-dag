@@ -27,7 +27,7 @@ import joblib
 logger = logging.getLogger(__name__)
 
 # Configuration
-MLFLOW_TRACKING_URI = "http://mlflow.mlflow.svc.cluster.local:80"
+MLFLOW_TRACKING_URI = "http://mlflow.mlflow.svc.cluster.local:5000"
 REGISTERED_MODEL_NAME = "bme680-anomaly-detector"
 S3_BUCKET = "iot-bme680-data-lake-prod"
 S3_BRONZE_PREFIX = "bronze/bme680/"
@@ -66,29 +66,23 @@ def load_production_model(**context):
         logger.info(f"   Stage: {model_version.current_stage}")
         logger.info(f"   Run ID: {model_version.run_id}")
         
-        # Load model
+        # ✅ Save model URI to XCom instead of model object
         model_uri = f"models:/{REGISTERED_MODEL_NAME}/{model_version.current_stage}"
-        model = mlflow.sklearn.load_model(model_uri)
-        
-        # Load scaler
-        run = client.get_run(model_version.run_id)
         scaler_uri = f"runs:/{model_version.run_id}/preprocessor/scaler.pkl"
         
-        # Download scaler artifact
-        local_path = mlflow.artifacts.download_artifacts(scaler_uri)
-        scaler = joblib.load(local_path)
+        logger.info("✅ Model URIs prepared")
         
-        logger.info("✅ Model and scaler loaded successfully")
-        
-        # Store in XCom
-        context['ti'].xcom_push(key='model', value=model)
-        context['ti'].xcom_push(key='scaler', value=scaler)
+        # Store URIs in XCom (lightweight, JSON-serializable)
+        context['ti'].xcom_push(key='model_uri', value=model_uri)
+        context['ti'].xcom_push(key='scaler_uri', value=scaler_uri)
         context['ti'].xcom_push(key='model_version', value=model_version.version)
+        context['ti'].xcom_push(key='run_id', value=model_version.run_id)
         
         return {
             'model_name': REGISTERED_MODEL_NAME,
             'version': model_version.version,
-            'stage': model_version.current_stage
+            'stage': model_version.current_stage,
+            'run_id': model_version.run_id
         }
         
     except Exception as e:
@@ -143,7 +137,7 @@ def run_inference(**context):
     logger.info("Running Inference")
     logger.info("=" * 60)
     
-    # Load data and model
+    # Load data
     raw_data = context['ti'].xcom_pull(task_ids='load_data', key='raw_data')
     
     if not raw_data:
@@ -151,8 +145,21 @@ def run_inference(**context):
         return None
     
     df = pd.DataFrame(raw_data)
-    model = context['ti'].xcom_pull(task_ids='load_model', key='model')
-    scaler = context['ti'].xcom_pull(task_ids='load_model', key='scaler')
+    
+    # ✅ Load model URIs from XCom
+    model_uri = context['ti'].xcom_pull(task_ids='load_model', key='model_uri')
+    scaler_uri = context['ti'].xcom_pull(task_ids='load_model', key='scaler_uri')
+    
+    logger.info(f"📦 Loading model from: {model_uri}")
+    logger.info(f"📦 Loading scaler from: {scaler_uri}")
+    
+    # ✅ Load model and scaler in this task
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    model = mlflow.sklearn.load_model(model_uri)
+    
+    # Download and load scaler
+    scaler_path = mlflow.artifacts.download_artifacts(scaler_uri)
+    scaler = joblib.load(scaler_path)
     
     logger.info(f"📊 Running inference on {len(df)} records")
     
