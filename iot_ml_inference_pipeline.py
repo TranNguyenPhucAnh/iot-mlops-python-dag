@@ -135,47 +135,49 @@ def run_inference(**context):
     logger.info("=" * 60)
     logger.info("Running Inference")
     logger.info("=" * 60)
-    
+
     # Load data
     raw_data = context['ti'].xcom_pull(task_ids='load_data', key='raw_data')
-    
     if not raw_data:
         logger.warning("⚠️ No data to process")
         return None
-    
+
     df = pd.DataFrame(raw_data)
-    
-    # ✅ Load model URIs from XCom
-    model_uri = context['ti'].xcom_pull(task_ids='load_model', key='model_uri')
+
+    # Load model URIs from XCom
+    model_uri  = context['ti'].xcom_pull(task_ids='load_model', key='model_uri')
     scaler_uri = context['ti'].xcom_pull(task_ids='load_model', key='scaler_uri')
-    
-    logger.info(f"📦 Loading model from: {model_uri}")
+
+    logger.info(f"📦 Loading model from:  {model_uri}")
     logger.info(f"📦 Loading scaler from: {scaler_uri}")
-    
-    # ✅ Load model and scaler in this task
+
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     model = mlflow.sklearn.load_model(model_uri)
-    
-    # Download and load scaler
+
     scaler_path = mlflow.artifacts.download_artifacts(scaler_uri)
     scaler = joblib.load(scaler_path)
-    
+
     logger.info(f"📊 Running inference on {len(df)} records")
-    
-    # Feature engineering (same as training)
+
+    # =============================================
+    # Feature Engineering
+    # =============================================
     df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df['hour'] = df['timestamp'].dt.hour
-    df['day_of_week'] = df['timestamp'].dt.dayofweek
-    df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
+    df = df.sort_values('timestamp').reset_index(drop=True)
+
+    df['hour']               = df['timestamp'].dt.hour
+    df['day_of_week']        = df['timestamp'].dt.dayofweek
+    df['is_weekend']         = (df['day_of_week'] >= 5).astype(int)
     df['temp_humidity_ratio'] = df['temperature'] / (df['humidity'] + 1e-6)
-    df['gas_pressure_ratio'] = df['gas_resistance'] / (df['pressure'] + 1e-6)
-    
-    # Rolling features (use available data only)
-    df = df.sort_values('timestamp')
+    df['gas_pressure_ratio']  = df['gas_resistance'] / (df['pressure'] + 1e-6)
+
     for col in ['temperature', 'humidity', 'iaq_score']:
         df[f'{col}_rolling_mean'] = df[col].rolling(window=10, min_periods=1).mean()
-        df[f'{col}_rolling_std'] = df[col].rolling(window=10, min_periods=1).std().fillna(0)
-    
+        df[f'{col}_rolling_std']  = df[col].rolling(window=10, min_periods=1).std().fillna(0)
+
+    # =============================================
+    # ✅ KEY FIX: Align features với scaler
+    # =============================================
     feature_cols = [
         'temperature', 'humidity', 'pressure', 'gas_resistance', 'iaq_score',
         'hour', 'day_of_week', 'is_weekend',
@@ -184,39 +186,84 @@ def run_inference(**context):
         'humidity_rolling_mean', 'humidity_rolling_std',
         'iaq_score_rolling_mean', 'iaq_score_rolling_std'
     ]
-    
-    X = df[feature_cols]
-    
-    # Scale features
-    X_scaled = scaler.transform(X)
-    
-    # Predict
-    predictions = model.predict(X_scaled)
+
+    # Lấy đúng thứ tự features từ scaler (nếu có)
+    if hasattr(scaler, 'feature_names_in_'):
+        train_features  = list(scaler.feature_names_in_)
+        infer_features  = list(df.columns)
+
+        # Log để debug
+        logger.info(f"Scaler trained on {len(train_features)} features: {train_features}")
+        logger.info(f"Inference has {len(df.columns)} columns")
+
+        # Check missing/extra
+        missing = set(train_features) - set(infer_features)
+        extra   = set(infer_features) - set(train_features)
+
+        if missing:
+            logger.error(f"❌ Missing features: {missing}")
+            raise ValueError(
+                f"Missing features required by scaler: {missing}\n"
+                f"Add these columns in feature engineering step."
+            )
+
+        if extra:
+            logger.warning(f"⚠️ Extra features (will be dropped): {extra}")
+
+        # ✅ Reorder theo đúng thứ tự của scaler
+        X = df[train_features]
+        logger.info(f"✅ Aligned features to scaler order: {train_features}")
+
+    else:
+        # Scaler không có feature_names_in_ (fit bằng numpy array)
+        # Dùng thứ tự mặc định và chuyển sang numpy
+        logger.warning("⚠️ Scaler has no feature_names_in_, using default feature_cols order")
+
+        # Kiểm tra feature_cols đủ không
+        missing = set(feature_cols) - set(df.columns)
+        if missing:
+            logger.error(f"❌ Missing features: {missing}")
+            raise ValueError(f"Missing features: {missing}")
+
+        X = df[feature_cols]
+
+        # ✅ Chuyển sang numpy để tránh lỗi feature name mismatch
+        X = pd.DataFrame(X.values, columns=feature_cols)
+        logger.info(f"✅ Using default feature_cols with numpy conversion")
+
+    logger.info(f"📐 Feature matrix shape: {X.shape}")
+
+    # =============================================
+    # Scale → Predict
+    # =============================================
+    X_scaled     = scaler.transform(X)
+    predictions  = model.predict(X_scaled)
     anomaly_scores = model.score_samples(X_scaled)
-    
-    # Add results to dataframe
-    df['prediction'] = predictions
+
+    df['prediction']    = predictions
     df['anomaly_score'] = anomaly_scores
-    df['is_anomaly'] = (predictions == -1).astype(int)
-    
-    anomaly_count = df['is_anomaly'].sum()
-    anomaly_rate = anomaly_count / len(df)
-    
+    df['is_anomaly']    = (predictions == -1).astype(int)
+
+    anomaly_count = int(df['is_anomaly'].sum())
+    anomaly_rate  = anomaly_count / len(df)
+
     logger.info(f"✅ Inference complete")
-    logger.info(f"📊 Detected {anomaly_count} anomalies ({anomaly_rate:.2%})")
-    
-    # Save predictions
-    now = datetime.utcnow()
+    logger.info(f"📊 {anomaly_count} anomalies detected ({anomaly_rate:.2%})")
+
+    # =============================================
+    # Save to Gold layer
+    # =============================================
+    now       = datetime.utcnow()
     gold_path = (
         f"{S3_GOLD_PREFIX}"
         f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
         f"predictions_{now.strftime('%H%M%S')}.parquet"
     )
-    
+
     buffer = BytesIO()
     df.to_parquet(buffer, index=False, compression='snappy')
     buffer.seek(0)
-    
+
     s3_hook = S3Hook(aws_conn_id='aws_default')
     s3_hook.load_file_obj(
         file_obj=buffer,
@@ -224,24 +271,27 @@ def run_inference(**context):
         bucket_name=S3_BUCKET,
         replace=True
     )
-    
+
     logger.info(f"💾 Saved predictions to s3://{S3_BUCKET}/{gold_path}")
-    
+
+    # =============================================
     # Push anomalies for alerting
+    # =============================================
     if anomaly_count > 0:
-        anomalies = df[df['is_anomaly'] == 1][
-            ['timestamp', 'device_id', 'temperature', 'humidity', 
-             'iaq_score', 'anomaly_score']
-        ].to_dict('records')
-        
+        anomaly_cols = ['timestamp', 'device_id', 'temperature',
+                        'humidity', 'iaq_score', 'anomaly_score']
+        # Chỉ lấy cols tồn tại
+        anomaly_cols = [c for c in anomaly_cols if c in df.columns]
+
+        anomalies = df[df['is_anomaly'] == 1][anomaly_cols].to_dict('records')
         context['ti'].xcom_push(key='anomalies', value=anomalies)
-    
+
     return {
         'total_records': len(df),
         'anomaly_count': anomaly_count,
-        'anomaly_rate': float(anomaly_rate)
+        'anomaly_rate':  float(anomaly_rate)
     }
-
+    
 def send_alerts(**context):
     """Send alerts for detected anomalies"""
     logger.info("=" * 60)
