@@ -43,7 +43,7 @@ S3_SILVER_PREFIX = "silver/bme680_features/"
 REGISTERED_MODEL_NAME = "bme680-anomaly-detector"
 
 # Model hyperparameters
-CONTAMINATION = 0.05  # Expected % of anomalies
+CONTAMINATION = 0.1  # Expected % of anomalies
 N_ESTIMATORS = 100
 RANDOM_STATE = 42
 
