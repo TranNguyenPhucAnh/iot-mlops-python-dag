@@ -105,7 +105,6 @@ def load_recent_data(**context):
         f"year={execution_date.year}/"
         f"month={execution_date.month:02d}/"
         f"day={execution_date.day:02d}/"
-        f"hour={execution_date.hour:02d}/"
     )
     
     keys = s3_hook.list_keys(bucket_name=S3_BUCKET, prefix=prefix)
