@@ -234,6 +234,32 @@ def run_inference(**context):
     logger.info(f"📐 Feature matrix shape: {X.shape}")
 
     # =============================================
+    # ✅ Debug: Validate data trước khi scale
+    # =============================================
+    logger.info("🔍 Sample raw data (first 3 rows):")
+    logger.info(f"\n{X.head(3).to_string()}")
+
+    # Kiểm tra giá trị hợp lý
+    sensor_ranges = {
+        'temperature': (-20, 80),
+        'humidity':    (0, 100),
+        'pressure':    (900, 1100),
+        'iaq_score':   (0, 500),
+    }
+    for col, (lo, hi) in sensor_ranges.items():
+        if col in X.columns:
+            out = ((X[col] < lo) | (X[col] > hi)).sum()
+            if out > 0:
+                logger.warning(
+                    f"⚠️ {col}: {out} values out of range [{lo}, {hi}] "
+                    f"(min={X[col].min():.2f}, max={X[col].max():.2f})"
+                )
+
+    logger.info("🔍 Scaler parameters:")
+    logger.info(f"  Mean:  {dict(zip(X.columns, scaler.mean_.round(3)))}")
+    logger.info(f"  Scale: {dict(zip(X.columns, scaler.scale_.round(3)))}")
+
+    # =============================================
     # Scale → Predict
     # =============================================
     X_scaled     = scaler.transform(X)
@@ -280,10 +306,22 @@ def run_inference(**context):
     if anomaly_count > 0:
         anomaly_cols = ['timestamp', 'device_id', 'temperature',
                         'humidity', 'iaq_score', 'anomaly_score']
-        # Chỉ lấy cols tồn tại
         anomaly_cols = [c for c in anomaly_cols if c in df.columns]
 
-        anomalies = df[df['is_anomaly'] == 1][anomaly_cols].to_dict('records')
+        anomaly_df = df[df['is_anomaly'] == 1][anomaly_cols].copy()
+
+        # ✅ FIX 1: Convert tất cả non-serializable types
+        for col in anomaly_df.columns:
+            # Timestamp → string
+            if pd.api.types.is_datetime64_any_dtype(anomaly_df[col]):
+                anomaly_df[col] = anomaly_df[col].dt.strftime('%Y-%m-%dT%H:%M:%S')
+            # numpy types → python native
+            elif pd.api.types.is_float_dtype(anomaly_df[col]):
+                anomaly_df[col] = anomaly_df[col].astype(float)
+            elif pd.api.types.is_integer_dtype(anomaly_df[col]):
+                anomaly_df[col] = anomaly_df[col].astype(int)
+
+        anomalies = anomaly_df.to_dict('records')
         context['ti'].xcom_push(key='anomalies', value=anomalies)
 
     return {
