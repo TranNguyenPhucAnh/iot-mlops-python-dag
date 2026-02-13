@@ -2,7 +2,7 @@ pipeline {
     agent {
         kubernetes {
             yaml '''
-# Kubernetes Pod Template: Định nghĩa Pod structure cho Jenkins Kubernetes agent (có khi cài đặt Jenkins Kubernetes Plugin)
+# Kubernetes Pod Template: Định nghĩa Pod structure cho Jenkins Kubernetes agent (có sẵn khi cài đặt Jenkins Kubernetes Plugin)
 apiVersion: v1
 kind: Pod
 spec:
