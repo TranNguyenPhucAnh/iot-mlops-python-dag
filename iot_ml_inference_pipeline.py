@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 MLFLOW_TRACKING_URI = "http://mlflow.mlflow.svc.cluster.local:80"
-REGISTERED_MODEL_NAME = "iot-bme680-anomaly-detector"
+REGISTERED_MODEL_NAME = "bme680-anomaly-detector"
 S3_BUCKET = "iot-bme680-data-lake-prod"
 S3_BRONZE_PREFIX = "bronze/bme680/"
 S3_GOLD_PREFIX = "gold/bme680_predictions/"
