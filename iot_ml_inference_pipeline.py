@@ -42,7 +42,11 @@ def load_production_model(**context):
     
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     client = MlflowClient()
-    
+    models = client.search_registered_models()
+    logger.info("Danh sách model hiện có trong Registry:")
+    for m in models:
+        logger.info(f"'{m.name}'") # Dùng dấu nháy đơn để lộ dấu cách nếu có
+        
     try:
         # Get production model
         prod_versions = client.get_latest_versions(
