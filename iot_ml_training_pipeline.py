@@ -40,7 +40,7 @@ EXPERIMENT_NAME = "iot_bme680_anomaly_detection"
 S3_BUCKET = "iot-bme680-data-lake-prod"
 S3_BRONZE_PREFIX = "bronze/bme680/"
 S3_SILVER_PREFIX = "silver/bme680_features/"
-REGISTERED_MODEL_NAME = "iot-bme680-anomaly-detector"
+REGISTERED_MODEL_NAME = "bme680-anomaly-detector"
 
 # Model hyperparameters
 CONTAMINATION = 0.1  # Expected % of anomalies
