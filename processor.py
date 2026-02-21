@@ -245,6 +245,7 @@ def pull_and_process_sqs(**context):
     s3_path = (
         f"bronze/bme680/"
         f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
+        f"hour={now.hour:02d}/"
         f"data_{now.strftime('%H%M%S')}.parquet"
     )
 
