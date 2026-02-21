@@ -163,6 +163,17 @@ def run_inference(**context):
 
     logger.info(f"📊 Running inference on {len(df)} records")
 
+    # Trong run_inference(), sau khi load model và scaler, thêm:
+    try:
+        thresholds_path = mlflow.artifacts.download_artifacts(
+            f"runs:/{run_id}/label_thresholds.json"
+        )
+        with open(thresholds_path) as f:
+            thresholds = json.load(f)
+        logger.info(f"📋 Label thresholds used during training: {thresholds}")
+    except Exception:
+        logger.warning("⚠️ Không load được label_thresholds.json, bỏ qua")
+
     # =============================================
     # Feature Engineering
     # =============================================
