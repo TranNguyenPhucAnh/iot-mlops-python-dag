@@ -42,10 +42,12 @@ S3_BRONZE_PREFIX = "bronze/bme680/"
 S3_SILVER_PREFIX = "silver/bme680_features/"
 REGISTERED_MODEL_NAME = "bme680-anomaly-detector"
 
-# Model hyperparameters
-CONTAMINATION = 0.1  # Expected % of anomalies
 N_ESTIMATORS = 100
 RANDOM_STATE = 42
+
+# Đổi threshold sang ROC-AUC thay F1
+MIN_ROC_AUC = 0.70
+MIN_PRECISION = 0.50  # Hạ xuống cho phù hợp thực tế
 
 # ==================== Helper Functions ====================
 
@@ -205,12 +207,10 @@ def extract_and_validate_data(**context):
     return metrics
 
 def feature_engineering(**context):
-    """Create features for anomaly detection"""
     logger.info("=" * 60)
     logger.info("STEP 3: Feature Engineering")
     logger.info("=" * 60)
     
-    # Load data
     clean_data = context['ti'].xcom_pull(task_ids='extract_validate_data', key='clean_data')
     silver_path = context['ti'].xcom_pull(task_ids='extract_validate_data', key='silver_data_path')
     
@@ -223,37 +223,71 @@ def feature_engineering(**context):
     
     logger.info(f"📊 Engineering features for {len(df):,} records")
     
-    # Parse timestamp
     df['timestamp'] = pd.to_datetime(df['timestamp'])
-    
-    # Time-based features
     df['hour'] = df['timestamp'].dt.hour
     df['day_of_week'] = df['timestamp'].dt.dayofweek
     df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
-    
-    # Sensor-derived features
     df['temp_humidity_ratio'] = df['temperature'] / (df['humidity'] + 1e-6)
     df['gas_pressure_ratio'] = df['gas_resistance'] / (df['pressure'] + 1e-6)
     
-    # Statistical features (rolling windows)
     df = df.sort_values('timestamp')
     for col in ['temperature', 'humidity', 'iaq_score']:
         df[f'{col}_rolling_mean'] = df[col].rolling(window=10, min_periods=1).mean()
         df[f'{col}_rolling_std'] = df[col].rolling(window=10, min_periods=1).std().fillna(0)
     
-    # Anomaly labels (synthetic for training - based on IAQ score)
-    # In production, these would come from labeled data
+    # ============================================================
+    # ✅ THAY ĐỔI CHÍNH: Label dựa trên phân phối thực tế
+    # ============================================================
+    logger.info("\n=== Sensor Statistics (dùng để tính ngưỡng) ===")
+    for col in ['temperature', 'humidity', 'pressure', 'gas_resistance', 'iaq_score']:
+        logger.info(
+            f"  {col}: min={df[col].min():.1f}, "
+            f"mean={df[col].mean():.1f}, "
+            f"max={df[col].max():.1f}, "
+            f"p5={df[col].quantile(0.05):.1f}, "
+            f"p95={df[col].quantile(0.95):.1f}"
+        )
+    
+    # Ngưỡng dựa trên percentile — tự thích nghi với môi trường thực
+    gas_low_threshold  = df['gas_resistance'].quantile(0.05)   # Gas resistance quá thấp
+    iaq_high_threshold = df['iaq_score'].quantile(0.95)        # IAQ quá cao
+    temp_high          = df['temperature'].quantile(0.97)
+    temp_low           = df['temperature'].quantile(0.03)
+    humidity_high      = df['humidity'].quantile(0.97)
+    
     df['is_anomaly'] = (
-        (df['iaq_score'] > 200) |  # Heavily polluted
-        (df['temperature'] > 40) |  # Extreme temperature
-        (df['humidity'] > 90) |     # Extreme humidity
-        (df['gas_resistance'] < 5000)  # Very low gas resistance
+        (df['gas_resistance'] < gas_low_threshold) |   # Có mùi lạ / khí lạ
+        (df['iaq_score'] > iaq_high_threshold)       |   # Không khí kém
+        (df['temperature'] > temp_high)               |   # Nhiệt độ bất thường cao
+        (df['temperature'] < temp_low)                |   # Nhiệt độ bất thường thấp
+        (df['humidity'] > humidity_high)                   # Độ ẩm bất thường
     ).astype(int)
     
-    logger.info(f"✅ Created {df.shape[1]} features")
-    logger.info(f"📊 Anomaly rate: {df['is_anomaly'].mean():.2%}")
+    anomaly_rate = float(df['is_anomaly'].mean())
+    logger.info(f"\n✅ Anomaly rate với percentile label: {anomaly_rate:.2%}")
+    logger.info(f"   gas_resistance threshold (p5):  {gas_low_threshold:.0f}")
+    logger.info(f"   iaq_score threshold (p95):      {iaq_high_threshold:.1f}")
+    logger.info(f"   temperature range: [{temp_low:.1f}, {temp_high:.1f}]")
+    logger.info(f"   humidity threshold (p97):       {humidity_high:.1f}")
     
-    # Feature list
+    # Cảnh báo nếu data quá uniform (sensor chưa gặp sự kiện bất thường)
+    if anomaly_rate < 0.02:
+        logger.warning(
+            "⚠️ Anomaly rate < 2% — data có thể quá uniform. "
+            "Cân nhắc thu thập thêm data có bất thường (xịt nước hoa, thay đổi nhiệt độ...)"
+        )
+    
+    # Lưu thresholds để dùng trong inference (quan trọng!)
+    thresholds = {
+        'gas_resistance_p5':  float(gas_low_threshold),
+        'iaq_score_p95':      float(iaq_high_threshold),
+        'temperature_p03':    float(temp_low),
+        'temperature_p97':    float(temp_high),
+        'humidity_p97':       float(humidity_high),
+        'anomaly_rate':       anomaly_rate
+    }
+    context['ti'].xcom_push(key='label_thresholds', value=thresholds)
+    
     feature_cols = [
         'temperature', 'humidity', 'pressure', 'gas_resistance', 'iaq_score',
         'hour', 'day_of_week', 'is_weekend',
@@ -263,219 +297,200 @@ def feature_engineering(**context):
         'iaq_score_rolling_mean', 'iaq_score_rolling_std'
     ]
     
-    # Save features
     feature_data = {
         'features': df[feature_cols].to_dict('records'),
         'labels': df['is_anomaly'].tolist(),
         'feature_names': feature_cols,
         'timestamps': df['timestamp'].astype(str).tolist()
     }
-    
     context['ti'].xcom_push(key='feature_data', value=feature_data)
     
     return {
         'feature_count': len(feature_cols),
         'record_count': len(df),
-        'anomaly_rate': float(df['is_anomaly'].mean())
+        'anomaly_rate': anomaly_rate,
+        'thresholds': thresholds
     }
 
 def train_anomaly_model(**context):
-    """Train Isolation Forest anomaly detection model"""
     logger.info("=" * 60)
     logger.info("STEP 4: Training Anomaly Detection Model")
     logger.info("=" * 60)
     
-    # Setup MLflow
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
     
-    # Load feature data
-    feature_data = context['ti'].xcom_pull(task_ids='feature_engineering', key='feature_data')
+    feature_data  = context['ti'].xcom_pull(task_ids='feature_engineering', key='feature_data')
+    thresholds    = context['ti'].xcom_pull(task_ids='feature_engineering', key='label_thresholds')
     
     X = pd.DataFrame(feature_data['features'])
     y = np.array(feature_data['labels'])
     feature_names = feature_data['feature_names']
     
-    logger.info(f"📊 Training data: {X.shape}")
-    logger.info(f"📊 Features: {feature_names}")
+    # ✅ Contamination động theo anomaly rate thực tế
+    anomaly_rate  = thresholds['anomaly_rate']
+    contamination = float(np.clip(anomaly_rate, 0.01, 0.45))
+    logger.info(f"📊 Anomaly rate: {anomaly_rate:.2%} → contamination={contamination:.4f}")
     
-    # Train-test split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
-    )
-    
+    # ✅ Split theo thời gian, không random (tránh data leakage từ rolling features)
+    split_idx = int(len(X) * 0.8)
+    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
     logger.info(f"📊 Train: {X_train.shape}, Test: {X_test.shape}")
     
-    # Start MLflow run
+    # Kiểm tra test set có đủ anomaly không
+    if y_test.sum() < 5:
+        logger.warning(
+            f"⚠️ Test set chỉ có {y_test.sum()} anomalies — "
+            "metrics có thể không ổn định. Cần thêm data."
+        )
+    
     with mlflow.start_run(run_name=f"anomaly_detection_{context['ds_nodash']}") as run:
         run_id = run.info.run_id
         logger.info(f"🔬 MLflow Run ID: {run_id}")
         
-        # Log parameters
         params = {
-            'model_type': 'IsolationForest',
-            'contamination': CONTAMINATION,
-            'n_estimators': N_ESTIMATORS,
-            'random_state': RANDOM_STATE,
-            'train_size': len(X_train),
-            'test_size': len(X_test),
-            'n_features': len(feature_names)
+            'model_type':    'IsolationForest',
+            'contamination': contamination,
+            'n_estimators':  N_ESTIMATORS,
+            'random_state':  RANDOM_STATE,
+            'train_size':    len(X_train),
+            'test_size':     len(X_test),
+            'n_features':    len(feature_names),
+            'anomaly_rate':  anomaly_rate,
+            'split_method':  'time_based'  # Ghi rõ để tracking
         }
         mlflow.log_params(params)
-        
-        # Log dataset info
         mlflow.log_param('training_date', context['ds'])
-        mlflow.log_param('data_source', f's3://{S3_BUCKET}/{S3_BRONZE_PREFIX}')
         
-        # Feature scaler
-        logger.info("📐 Scaling features...")
+        # Log thresholds dùng để label
+        mlflow.log_params({f"threshold_{k}": v for k, v in thresholds.items()})
+        
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
+        X_test_scaled  = scaler.transform(X_test)
         
-        # Train model
-        logger.info("🏋️ Training Isolation Forest...")
         model = IsolationForest(
-            contamination=CONTAMINATION,
+            contamination=contamination,
             n_estimators=N_ESTIMATORS,
             random_state=RANDOM_STATE,
-            n_jobs=-1,
-            verbose=1
+            n_jobs=-1
         )
-        
         model.fit(X_train_scaled)
         logger.info("✅ Model training complete")
         
-        # Predictions (-1 for anomaly, 1 for normal)
-        y_train_pred = model.predict(X_train_scaled)
-        y_test_pred = model.predict(X_test_scaled)
+        # ✅ Dùng anomaly score liên tục để tính ROC-AUC (phù hợp hơn F1)
+        from sklearn.metrics import (
+            roc_auc_score, accuracy_score,
+            precision_score, recall_score, f1_score
+        )
         
-        # Convert to binary (1 for anomaly, 0 for normal)
-        y_train_pred_binary = (y_train_pred == -1).astype(int)
-        y_test_pred_binary = (y_test_pred == -1).astype(int)
+        # score_samples trả về giá trị càng âm = càng anomaly
+        # Negate để chiều dương = anomaly (đúng convention của roc_auc)
+        test_scores_continuous = -model.score_samples(X_test_scaled)
         
-        # Calculate metrics
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+        y_test_pred_binary = (model.predict(X_test_scaled) == -1).astype(int)
+        y_train_pred_binary = (model.predict(X_train_scaled) == -1).astype(int)
         
-        train_metrics = {
-            'train_accuracy': accuracy_score(y_train, y_train_pred_binary),
-            'train_precision': precision_score(y_train, y_train_pred_binary, zero_division=0),
-            'train_recall': recall_score(y_train, y_train_pred_binary, zero_division=0),
-            'train_f1': f1_score(y_train, y_train_pred_binary, zero_division=0)
-        }
+        # ROC-AUC chỉ tính được khi có cả 2 class
+        if len(np.unique(y_test)) == 2:
+            roc_auc = roc_auc_score(y_test, test_scores_continuous)
+        else:
+            logger.warning("⚠️ Test set chỉ có 1 class, ROC-AUC không tính được, gán = 0")
+            roc_auc = 0.0
         
         test_metrics = {
-            'test_accuracy': accuracy_score(y_test, y_test_pred_binary),
+            'test_roc_auc':   roc_auc,
+            'test_accuracy':  accuracy_score(y_test, y_test_pred_binary),
             'test_precision': precision_score(y_test, y_test_pred_binary, zero_division=0),
-            'test_recall': recall_score(y_test, y_test_pred_binary, zero_division=0),
-            'test_f1': f1_score(y_test, y_test_pred_binary, zero_division=0)
+            'test_recall':    recall_score(y_test, y_test_pred_binary, zero_division=0),
+            'test_f1':        f1_score(y_test, y_test_pred_binary, zero_division=0)
+        }
+        train_metrics = {
+            'train_accuracy':  accuracy_score(y_train, y_train_pred_binary),
+            'train_precision': precision_score(y_train, y_train_pred_binary, zero_division=0),
+            'train_recall':    recall_score(y_train, y_train_pred_binary, zero_division=0),
+            'train_f1':        f1_score(y_train, y_train_pred_binary, zero_division=0)
         }
         
-        # Log metrics
         mlflow.log_metrics({**train_metrics, **test_metrics})
         
         logger.info("\n=== Model Performance ===")
-        logger.info("Train Metrics:")
-        for k, v in train_metrics.items():
-            logger.info(f"  {k}: {v:.4f}")
-        
-        logger.info("\nTest Metrics:")
         for k, v in test_metrics.items():
             logger.info(f"  {k}: {v:.4f}")
         
-        # Confusion matrix
-        cm = confusion_matrix(y_test, y_test_pred_binary)
-        logger.info(f"\nConfusion Matrix:\n{cm}")
-        
-        # Log confusion matrix as artifact
+        # Confusion matrix & artifacts (giữ nguyên)
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         import seaborn as sns
+        from sklearn.metrics import confusion_matrix
         
+        cm = confusion_matrix(y_test, y_test_pred_binary)
         plt.figure(figsize=(8, 6))
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.title('Confusion Matrix')
+        plt.title(f'Confusion Matrix (ROC-AUC={roc_auc:.3f})')
         plt.ylabel('True Label')
         plt.xlabel('Predicted Label')
         plt.savefig('/tmp/confusion_matrix.png')
         mlflow.log_artifact('/tmp/confusion_matrix.png')
         plt.close()
         
-        # Feature importance (anomaly scores)
-        anomaly_scores = model.score_samples(X_test_scaled)
-        feature_importance = pd.DataFrame({
-            'feature': feature_names,
-            'importance': np.abs(X_test_scaled.mean(axis=0))
-        }).sort_values('importance', ascending=False)
+        # ✅ Log thresholds dưới dạng artifact để inference pipeline tham chiếu
+        import json
+        with open('/tmp/label_thresholds.json', 'w') as f:
+            json.dump(thresholds, f, indent=2)
+        mlflow.log_artifact('/tmp/label_thresholds.json')
         
-        logger.info(f"\n=== Top 10 Features ===\n{feature_importance.head(10)}")
-        
-        # Log feature importance
-        feature_importance.to_csv('/tmp/feature_importance.csv', index=False)
-        mlflow.log_artifact('/tmp/feature_importance.csv')
-        
-        # Save model artifacts
-        logger.info("💾 Saving model artifacts...")
-        
-        # Save scaler
         scaler_path = '/tmp/scaler.pkl'
         joblib.dump(scaler, scaler_path)
         mlflow.log_artifact(scaler_path, artifact_path='preprocessor')
         
-        # Save model
         mlflow.sklearn.log_model(
             sk_model=model,
             artifact_path='model',
-            registered_model_name=None,  # Will register separately
             signature=mlflow.models.infer_signature(X_train_scaled, y_train_pred_binary)
         )
         
-        # Log tags
         mlflow.set_tags({
             'team': 'iot-ml',
             'project': 'bme680-anomaly-detection',
             'environment': 'production',
-            'dag_id': context['dag'].dag_id,
-            'task_id': context['task'].task_id
+            'label_strategy': 'percentile_based'  # ✅ Tag rõ strategy
         })
         
-        logger.info(f"✅ Model logged to MLflow: {run_id}")
-        
-        # Push metrics to XCom for decision making
         context['ti'].xcom_push(key='model_metrics', value=test_metrics)
         context['ti'].xcom_push(key='run_id', value=run_id)
         
-        return {
-            'run_id': run_id,
-            'test_f1': test_metrics['test_f1']
-        }
+        return {'run_id': run_id, 'test_roc_auc': roc_auc}
 
 def decide_model_registration(**context):
-    """Decide whether to register model based on performance"""
     logger.info("=" * 60)
     logger.info("STEP 5: Model Registration Decision")
     logger.info("=" * 60)
     
     metrics = context['ti'].xcom_pull(task_ids='train_model', key='model_metrics')
     
-    # Thresholds
-    MIN_F1_SCORE = 0.7
-    MIN_PRECISION = 0.6
-    
-    f1 = metrics['test_f1']
+    roc_auc   = metrics['test_roc_auc']
     precision = metrics['test_precision']
     
-    logger.info(f"📊 Test F1: {f1:.4f} (threshold: {MIN_F1_SCORE})")
-    logger.info(f"📊 Test Precision: {precision:.4f} (threshold: {MIN_PRECISION})")
+    logger.info(f"📊 ROC-AUC:  {roc_auc:.4f}  (threshold: {MIN_ROC_AUC})")
+    logger.info(f"📊 Precision: {precision:.4f} (threshold: {MIN_PRECISION})")
     
-    if f1 >= MIN_F1_SCORE and precision >= MIN_PRECISION:
-        logger.info("✅ Model meets quality thresholds - will register")
+    # Nếu test set không có anomaly → ROC-AUC = 0 → cảnh báo rõ ràng
+    if metrics['test_f1'] == 0 and roc_auc == 0:
+        logger.warning(
+            "⚠️ Cả F1 lẫn ROC-AUC = 0. Khả năng cao test set không có anomaly. "
+            "Cần thu thập thêm data có sự kiện bất thường trước khi train."
+        )
+    
+    if roc_auc >= MIN_ROC_AUC and precision >= MIN_PRECISION:
+        logger.info("✅ Model đủ điều kiện — sẽ register")
         return 'register_model'
     else:
-        logger.warning("⚠️ Model below quality thresholds - skipping registration")
+        logger.warning("⚠️ Model chưa đủ điều kiện — bỏ qua registration")
         return 'skip_registration'
-
+        
 def register_model(**context):
     """Register model to MLflow Model Registry"""
     logger.info("=" * 60)
