@@ -248,12 +248,13 @@ def feature_engineering(**context):
             f"p95={df[col].quantile(0.95):.1f}"
         )
     
-    # Ngưỡng dựa trên percentile — tự thích nghi với môi trường thực
-    gas_low_threshold  = df['gas_resistance'].quantile(0.05)   # Gas resistance quá thấp
-    iaq_high_threshold = df['iaq_score'].quantile(0.95)        # IAQ quá cao
-    temp_high          = df['temperature'].quantile(0.97)
-    temp_low           = df['temperature'].quantile(0.03)
-    humidity_high      = df['humidity'].quantile(0.97)
+    # Thay vì p5/p95 (luôn tạo ~10% anomaly)
+    # Dùng p2/p98 hoặc p1/p99 — chỉ label những điểm thực sự cực đoan
+    gas_low_threshold  = df['gas_resistance'].quantile(0.02)
+    iaq_high_threshold = df['iaq_score'].quantile(0.98)
+    temp_high          = df['temperature'].quantile(0.98)
+    temp_low           = df['temperature'].quantile(0.02)
+    humidity_high      = df['humidity'].quantile(0.98)
     
     df['is_anomaly'] = (
         (df['gas_resistance'] < gas_low_threshold) |   # Có mùi lạ / khí lạ
