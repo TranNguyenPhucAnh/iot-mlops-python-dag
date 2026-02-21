@@ -299,6 +299,7 @@ def run_inference(**context):
     gold_path = (
         f"{S3_GOLD_PREFIX}"
         f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
+        f"hour={now.hour:02d}/"
         f"predictions_{now.strftime('%H%M%S')}.parquet"
     )
 
