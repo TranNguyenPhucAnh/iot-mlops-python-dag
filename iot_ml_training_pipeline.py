@@ -50,53 +50,63 @@ MIN_ROC_AUC = 0.70
 MIN_PRECISION = 0.50  # Hạ xuống cho phù hợp thực tế
 
 # ==================== Helper Functions ====================
-
 def get_latest_partition_path(**context):
-    """Find latest data partition in S3 Bronze layer"""
+    """Find latest data partition in S3 Bronze layer — scan tất cả hour trong ngày"""
     logger.info("=" * 60)
     logger.info("STEP 1: Finding latest data partition")
     logger.info("=" * 60)
-    
+
     s3_hook = S3Hook(aws_conn_id='aws_default')
     execution_date = context.get('logical_date') or context.get('execution_date')
-    
-    # Look for data from last 7 days
+
+    # Look for data from last 7 days, tất cả 24 giờ
     partitions = []
     for days_back in range(7):
         check_date = execution_date - timedelta(days=days_back)
-        prefix = (
-            f"{S3_BRONZE_PREFIX}"
-            f"year={check_date.year}/"
-            f"month={check_date.month:02d}/"
-            f"day={check_date.day:02d}/"
-        )
-        
-        keys = s3_hook.list_keys(
-            bucket_name=S3_BUCKET,
-            prefix=prefix
-        )
-        
-        if keys:
-            parquet_files = [k for k in keys if k.endswith('.parquet')]
-            if parquet_files:
-                partitions.append({
-                    'date': check_date,
-                    'prefix': prefix,
-                    'files': parquet_files,
-                    'file_count': len(parquet_files)
-                })
-                logger.info(f"✅ Found partition: {prefix} ({len(parquet_files)} files)")
-    
+        all_files  = []
+
+        for hour in range(24):
+            prefix = (
+                f"{S3_BRONZE_PREFIX}"
+                f"year={check_date.year}/"
+                f"month={check_date.month:02d}/"
+                f"day={check_date.day:02d}/"
+                f"hour={hour:02d}/"
+            )
+
+            keys = s3_hook.list_keys(bucket_name=S3_BUCKET, prefix=prefix)
+            if keys:
+                parquet_files = [k for k in keys if k.endswith('.parquet')]
+                if parquet_files:
+                    all_files.extend(parquet_files)
+                    logger.info(f"  ✅ hour={hour:02d}: {len(parquet_files)} files")
+
+        if all_files:
+            partitions.append({
+                'date':       check_date.isoformat(),
+                'prefix':     (
+                    f"{S3_BRONZE_PREFIX}"
+                    f"year={check_date.year}/"
+                    f"month={check_date.month:02d}/"
+                    f"day={check_date.day:02d}/"
+                ),
+                'files':      all_files,
+                'file_count': len(all_files)
+            })
+            logger.info(
+                f"📅 day={check_date.date()} → tổng {len(all_files)} files "
+                f"across {sum(1 for h in range(24))} giờ được scan"
+            )
+
     if not partitions:
         logger.error("❌ No data found in last 7 days")
         raise ValueError("No training data available")
-    
+
     # Use most recent partition
     latest = partitions[0]
-    logger.info(f"📅 Using latest partition: {latest['date'].date()}")
-    logger.info(f"📁 Files: {latest['file_count']}")
-    
-    # Push to XCom
+    logger.info(f"📅 Using latest partition: {latest['date']}")
+    logger.info(f"📁 Total files: {latest['file_count']}")
+
     context['ti'].xcom_push(key='data_partition', value=latest)
     return latest
 
