@@ -209,6 +209,9 @@ def run_inference(**context):
         f"hour={now.hour:02d}/"
         f"predictions_{now.strftime('%H%M%S')}.parquet"
     )
+    
+    # ✅ Đảm bảo timestamp là datetime trước khi lưu
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
 
     buffer = BytesIO()
     df.to_parquet(buffer, index=False, compression='snappy')
