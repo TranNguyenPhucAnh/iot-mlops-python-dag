@@ -16,12 +16,14 @@ import pandas as pd
 import numpy as np
 import logging
 from io import BytesIO
+from airflow import Dataset
 
 logger = logging.getLogger(__name__)
 
 S3_BUCKET        = "iot-bme680-data-lake-prod"
 S3_BRONZE_PREFIX = "bronze/bme680/"
 S3_SILVER_PREFIX = "silver/bme680_features/"
+SILVER_DATASET = Dataset(f"s3://{S3_BUCKET}/{S3_SILVER_PREFIX}")
 
 # Validation ranges
 VALIDATION_RULES = {
@@ -312,6 +314,6 @@ with DAG(
     t_extract  = PythonOperator(task_id='extract_bronze',       python_callable=extract_bronze)
     t_validate = PythonOperator(task_id='validate_and_clean',   python_callable=validate_and_clean)
     t_features = PythonOperator(task_id='feature_engineering',  python_callable=feature_engineering)
-    t_write    = PythonOperator(task_id='write_silver',         python_callable=write_silver)
+    t_write    = PythonOperator(task_id='write_silver',         python_callable=write_silver, outlets=[SILVER_DATASET]  # ← báo cho Airflow biết đã ghi S3 Data Lake Silver)
 
     t_extract >> t_validate >> t_features >> t_write
