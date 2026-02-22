@@ -223,12 +223,70 @@ def load_silver_data(**context):
     return {'record_count': len(df_combined), 'anomaly_rate': anomaly_rate}
 
 
+def generate_synthetic_anomalies(df: pd.DataFrame, anomaly_ratio: float = 0.05, random_state: int = 42) -> pd.DataFrame:
+    """
+    Tạo synthetic anomalies và recalculate derived features để đảm bảo consistency.
+    Chỉ gọi hàm này trên TRAIN SET — không đụng test set.
+    """
+    np.random.seed(random_state)
+    df_synth   = df.copy()
+    n_anomalies = int(len(df_synth) * anomaly_ratio)
+
+    anomaly_indices = np.random.choice(df_synth.index, size=n_anomalies, replace=False)
+    logger.info(f"🧪 Generating {n_anomalies} synthetic anomalies ({anomaly_ratio:.0%} of train set)...")
+
+    scenario_counts = {'smoke_spike': 0, 'extreme_heat': 0, 'sensor_drift': 0}
+
+    for i in anomaly_indices:
+        # smoke/heat xảy ra thực tế nhiều hơn sensor_drift
+        scenario = np.random.choice(
+            ['smoke_spike', 'extreme_heat', 'sensor_drift'],
+            p=[0.50, 0.35, 0.15]
+        )
+        scenario_counts[scenario] += 1
+
+        if scenario == 'smoke_spike':
+            # Khói/nấu ăn: IAQ vọt, gas_resistance giảm mạnh
+            df_synth.loc[i, 'iaq_score']     = np.random.uniform(250, 450)
+            df_synth.loc[i, 'gas_resistance'] = df_synth.loc[i, 'gas_resistance'] * 0.1
+
+        elif scenario == 'extreme_heat':
+            # Thiết bị quá nhiệt / gần nguồn nhiệt
+            df_synth.loc[i, 'temperature'] = np.random.uniform(40, 55)
+            df_synth.loc[i, 'humidity']    = np.random.uniform(10, 20)
+
+        elif scenario == 'sensor_drift':
+            # Lỗi cảm biến: giá trị bất hợp lý
+            # Dùng 490 thay vì 500 để tránh vượt IAQ_MAX_SCORE
+            df_synth.loc[i, 'iaq_score'] = np.random.choice([0.1, 490])
+
+        df_synth.loc[i, 'is_anomaly'] = 1
+
+    # ── Recalculate derived features sau khi inject ───────────────
+    # Bắt buộc: nếu bỏ bước này model sẽ học features mâu thuẫn nhau
+    # (vd: iaq_score=350 nhưng iaq_score_rolling_mean=45)
+
+    # Ratio features
+    df_synth['temp_humidity_ratio'] = df_synth['temperature'] / (df_synth['humidity'] + 1e-6)
+    df_synth['gas_pressure_ratio']  = df_synth['gas_resistance'] / (df_synth['pressure'] + 1e-6)
+
+    # Rolling features — window=10 khớp với Transform DAG
+    for col in ['temperature', 'humidity', 'iaq_score']:
+        df_synth[f'{col}_rolling_mean'] = (
+            df_synth[col].rolling(window=10, min_periods=1).mean()
+        )
+        df_synth[f'{col}_rolling_std'] = (
+            df_synth[col].rolling(window=10, min_periods=1).std().fillna(0)
+        )
+
+    logger.info(f"   Scenarios injected : {scenario_counts}")
+    logger.info(f"   Anomalies in train : {int(df_synth['is_anomaly'].sum())} "
+                f"({df_synth['is_anomaly'].mean():.2%})")
+
+    return df_synth
+
+
 def train_anomaly_model(**context):
-    """
-    Train IsolationForest với:
-      - contamination cap 0.10 (thay vì 0.45) phù hợp indoor sensor
-      - Label từ domain rules → contamination có nghĩa hơn
-    """
     logger.info("=" * 60)
     logger.info("STEP 2: Training Anomaly Detection Model")
     logger.info("=" * 60)
@@ -239,30 +297,48 @@ def train_anomaly_model(**context):
     silver_data = context['ti'].xcom_pull(task_ids='load_silver_data', key='silver_data')
     thresholds  = context['ti'].xcom_pull(task_ids='load_silver_data', key='label_thresholds')
 
-    df = pd.DataFrame(silver_data)
-    X  = df[FEATURE_COLS]
-    y  = np.array(df['is_anomaly'])
-
+    df           = pd.DataFrame(silver_data)
+    X            = df[FEATURE_COLS]
+    y            = np.array(df['is_anomaly'])
     anomaly_rate = thresholds['anomaly_rate']
 
-    # Cap 0.10 thay vì 0.45 — indoor sensor hiếm khi có >10% anomaly thật sự
-    # Buffer 1.2x để model không bỏ sót anomaly ở vùng biên
-    contamination = float(np.clip(anomaly_rate * 1.2, 0.01, 0.10))
-    logger.info(f"📊 Anomaly rate: {anomaly_rate:.2%} → contamination={contamination:.4f}")
+    # ── Split theo thời gian TRƯỚC khi augment ────────────────────
+    # Quan trọng: split trước, augment sau → test set luôn là real data
+    split_idx       = int(len(X) * 0.8)
+    X_train, X_test = X.iloc[:split_idx],  X.iloc[split_idx:]
+    y_train, y_test = y[:split_idx],        y[split_idx:]
 
-    # ── Split theo thời gian (không random để tránh data leakage) ─
-    split_idx = int(len(X) * 0.8)
-    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y[:split_idx], y[split_idx:]
-    logger.info(f"📊 Train: {X_train.shape}, Test: {X_test.shape}")
-    logger.info(f"📊 Train anomalies: {y_train.sum()} ({y_train.mean():.2%})")
-    logger.info(f"📊 Test anomalies:  {y_test.sum()} ({y_test.mean():.2%})")
+    logger.info(f"📊 Train: {X_train.shape} | anomaly: {y_train.sum()} ({y_train.mean():.2%})")
+    logger.info(f"📊 Test : {X_test.shape}  | anomaly: {y_test.sum()} ({y_test.mean():.2%})")
 
     if y_test.sum() < 5:
         logger.warning(
             f"⚠️ Test set chỉ có {y_test.sum()} anomalies — "
-            "metrics có thể không ổn định, cần thêm data hoặc điều chỉnh threshold"
+            "metrics có thể không ổn định"
         )
+
+    # ── Synthetic augmentation — chỉ trên train set ──────────────
+    SYNTHETIC_RATIO = 0.05  # 5%: đủ để model học boundary, không overfit synthetic
+
+    df_train            = X_train.copy()
+    df_train['is_anomaly'] = y_train
+
+    df_train_augmented  = generate_synthetic_anomalies(
+        df_train,
+        anomaly_ratio=SYNTHETIC_RATIO,
+        random_state=RANDOM_STATE
+    )
+
+    X_train_aug = df_train_augmented[FEATURE_COLS]
+    y_train_aug = np.array(df_train_augmented['is_anomaly'])
+
+    # Contamination tính từ augmented rate (real + synthetic anomalies)
+    # Cap 0.15 — cao hơn v3 một chút vì có synthetic, nhưng vẫn hợp lý indoor
+    augmented_anomaly_rate = float(y_train_aug.mean())
+    contamination          = float(np.clip(augmented_anomaly_rate * 1.2, 0.01, 0.15))
+
+    logger.info(f"📊 Anomaly rate thực  : {anomaly_rate:.2%}")
+    logger.info(f"📊 Anomaly rate augmented: {augmented_anomaly_rate:.2%} → contamination={contamination:.4f}")
 
     with mlflow.start_run(run_name=f"anomaly_detection_{context['ds_nodash']}") as run:
         run_id = run.info.run_id
@@ -270,24 +346,30 @@ def train_anomaly_model(**context):
 
         # ── Log params ────────────────────────────────────────────
         mlflow.log_params({
-            'model_type':      'IsolationForest',
-            'contamination':   contamination,
-            'n_estimators':    N_ESTIMATORS,
-            'random_state':    RANDOM_STATE,
-            'train_size':      len(X_train),
-            'test_size':       len(X_test),
-            'n_features':      len(FEATURE_COLS),
-            'anomaly_rate':    anomaly_rate,
-            'split_method':    'time_based_80_20',
-            'training_date':   context['ds'],
-            'data_source':     f's3://{S3_BUCKET}/{S3_SILVER_PREFIX}',
-            'label_strategy':  'domain_rules_iaq',
+            'model_type':               'IsolationForest',
+            'contamination':            contamination,
+            'n_estimators':             N_ESTIMATORS,
+            'random_state':             RANDOM_STATE,
+            'train_size_original':      len(X_train),
+            'train_size_augmented':     len(X_train_aug),
+            'test_size':                len(X_test),
+            'n_features':               len(FEATURE_COLS),
+            'anomaly_rate_real':        anomaly_rate,
+            'anomaly_rate_augmented':   augmented_anomaly_rate,
+            'synthetic_anomaly_ratio':  SYNTHETIC_RATIO,
+            'augmentation':             'synthetic_anomalies_train_only',
+            'split_method':             'time_based_80_20',
+            'label_strategy':           'domain_rules_iaq',
+            'training_date':            context['ds'],
+            'data_source':              f's3://{S3_BUCKET}/{S3_SILVER_PREFIX}',
+            'pipeline_version':         'v3_augmented',
         })
         mlflow.log_params({f"threshold_{k}": v for k, v in thresholds.items()})
 
         # ── Scale ─────────────────────────────────────────────────
+        # fit_transform trên augmented train, chỉ transform trên test
         scaler         = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
+        X_train_scaled = scaler.fit_transform(X_train_aug)
         X_test_scaled  = scaler.transform(X_test)
 
         # ── Train ─────────────────────────────────────────────────
@@ -302,8 +384,8 @@ def train_anomaly_model(**context):
 
         # ── Predict ───────────────────────────────────────────────
         test_scores_continuous = -model.score_samples(X_test_scaled)
-        y_test_pred_binary     = (model.predict(X_test_scaled) == -1).astype(int)
-        y_train_pred_binary    = (model.predict(X_train_scaled) == -1).astype(int)
+        y_test_pred            = (model.predict(X_test_scaled) == -1).astype(int)
+        y_train_pred           = (model.predict(X_train_scaled) == -1).astype(int)
 
         # ── Metrics ───────────────────────────────────────────────
         if len(np.unique(y_test)) == 2:
@@ -311,37 +393,38 @@ def train_anomaly_model(**context):
         else:
             roc_auc = 0.0
             logger.warning(
-                f"⚠️ Test set chỉ có 1 class (all {'normal' if y_test.sum() == 0 else 'anomaly'}) "
-                "— ROC-AUC = 0. Cần điều chỉnh DOMAIN_THRESHOLDS để có cả 2 class trong test set."
+                f"⚠️ Test set chỉ có 1 class — ROC-AUC = 0. "
+                "Kiểm tra lại DOMAIN_THRESHOLDS."
             )
 
         test_metrics = {
             'test_roc_auc':   roc_auc,
-            'test_accuracy':  accuracy_score(y_test, y_test_pred_binary),
-            'test_precision': precision_score(y_test, y_test_pred_binary, zero_division=0),
-            'test_recall':    recall_score(y_test, y_test_pred_binary, zero_division=0),
-            'test_f1':        f1_score(y_test, y_test_pred_binary, zero_division=0)
+            'test_accuracy':  accuracy_score(y_test,        y_test_pred),
+            'test_precision': precision_score(y_test,       y_test_pred,  zero_division=0),
+            'test_recall':    recall_score(y_test,          y_test_pred,  zero_division=0),
+            'test_f1':        f1_score(y_test,              y_test_pred,  zero_division=0),
         }
+        # Train metrics tính trên augmented data (bao gồm synthetic)
         train_metrics = {
-            'train_accuracy':  accuracy_score(y_train, y_train_pred_binary),
-            'train_precision': precision_score(y_train, y_train_pred_binary, zero_division=0),
-            'train_recall':    recall_score(y_train, y_train_pred_binary, zero_division=0),
-            'train_f1':        f1_score(y_train, y_train_pred_binary, zero_division=0)
+            'train_accuracy':  accuracy_score(y_train_aug,  y_train_pred),
+            'train_precision': precision_score(y_train_aug, y_train_pred, zero_division=0),
+            'train_recall':    recall_score(y_train_aug,    y_train_pred, zero_division=0),
+            'train_f1':        f1_score(y_train_aug,        y_train_pred, zero_division=0),
         }
         mlflow.log_metrics({**train_metrics, **test_metrics})
 
         logger.info("\n=== Model Performance ===")
-        logger.info(f"  {'Metric':<20} {'Train':>8} {'Test':>8}  {'Threshold':>10}")
-        logger.info(f"  {'-'*50}")
-        logger.info(f"  {'ROC-AUC':<20} {'N/A':>8} {roc_auc:>8.4f}  {MIN_ROC_AUC:>10}")
-        logger.info(f"  {'Precision':<20} {train_metrics['train_precision']:>8.4f} "
-                    f"{test_metrics['test_precision']:>8.4f}  {MIN_PRECISION:>10}")
-        logger.info(f"  {'Recall':<20} {train_metrics['train_recall']:>8.4f} "
-                    f"{test_metrics['test_recall']:>8.4f}  {MIN_RECALL:>10}")
-        logger.info(f"  {'F1':<20} {train_metrics['train_f1']:>8.4f} "
-                    f"{test_metrics['test_f1']:>8.4f}")
-        logger.info(f"  {'Accuracy':<20} {train_metrics['train_accuracy']:>8.4f} "
-                    f"{test_metrics['test_accuracy']:>8.4f}")
+        logger.info(f"  {'Metric':<20} {'Train (aug)':>12} {'Test (real)':>12}  {'Threshold':>10}")
+        logger.info(f"  {'-'*58}")
+        logger.info(f"  {'ROC-AUC':<20} {'N/A':>12} {roc_auc:>12.4f}  {MIN_ROC_AUC:>10}")
+        logger.info(f"  {'Precision':<20} {train_metrics['train_precision']:>12.4f} "
+                    f"{test_metrics['test_precision']:>12.4f}  {MIN_PRECISION:>10}")
+        logger.info(f"  {'Recall':<20} {train_metrics['train_recall']:>12.4f} "
+                    f"{test_metrics['test_recall']:>12.4f}  {MIN_RECALL:>10}")
+        logger.info(f"  {'F1':<20} {train_metrics['train_f1']:>12.4f} "
+                    f"{test_metrics['test_f1']:>12.4f}")
+        logger.info(f"  {'Accuracy':<20} {train_metrics['train_accuracy']:>12.4f} "
+                    f"{test_metrics['test_accuracy']:>12.4f}")
 
         # ── Confusion matrix ──────────────────────────────────────
         import matplotlib
@@ -349,13 +432,15 @@ def train_anomaly_model(**context):
         import matplotlib.pyplot as plt
         import seaborn as sns
 
-        cm = confusion_matrix(y_test, y_test_pred_binary)
+        cm = confusion_matrix(y_test, y_test_pred)
         plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                    xticklabels=['Normal', 'Anomaly'],
-                    yticklabels=['Normal', 'Anomaly'])
+        sns.heatmap(
+            cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['Normal', 'Anomaly'],
+            yticklabels=['Normal', 'Anomaly']
+        )
         plt.title(
-            f'Confusion Matrix\n'
+            f'Confusion Matrix (Test — Real Data Only)\n'
             f'ROC-AUC={roc_auc:.3f}  '
             f'Precision={test_metrics["test_precision"]:.3f}  '
             f'Recall={test_metrics["test_recall"]:.3f}'
@@ -379,23 +464,22 @@ def train_anomaly_model(**context):
         mlflow.sklearn.log_model(
             sk_model=model,
             artifact_path='model',
-            signature=mlflow.models.infer_signature(X_train_scaled, y_train_pred_binary)
+            signature=mlflow.models.infer_signature(X_train_scaled, y_train_pred)
         )
-
         mlflow.set_tags({
-            'team':           'iot-ml',
-            'project':        'bme680-anomaly-detection',
-            'environment':    'production',
-            'label_strategy': 'domain_rules_iaq',   # đổi từ percentile_based
-            'data_layer':     'silver',
-            'pipeline_version': 'v3',
+            'team':              'iot-ml',
+            'project':           'bme680-anomaly-detection',
+            'environment':       'production',
+            'label_strategy':    'domain_rules_iaq',
+            'augmentation':      'synthetic_anomalies',
+            'data_layer':        'silver',
+            'pipeline_version':  'v3_augmented',
         })
 
         context['ti'].xcom_push(key='model_metrics', value=test_metrics)
         context['ti'].xcom_push(key='run_id',        value=run_id)
 
         return {'run_id': run_id, 'test_roc_auc': roc_auc}
-
 
 def decide_model_registration(**context):
     """
