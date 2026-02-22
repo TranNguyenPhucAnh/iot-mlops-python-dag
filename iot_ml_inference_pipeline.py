@@ -21,6 +21,7 @@ import json
 import logging
 from io import BytesIO
 import joblib
+from airflow import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ REGISTERED_MODEL_NAME = "bme680-anomaly-detector"
 S3_BUCKET             = "iot-bme680-data-lake-prod"
 S3_SILVER_PREFIX      = "silver/bme680_features/"
 S3_GOLD_PREFIX        = "gold/bme680_predictions/"
+SILVER_DATASET        = Dataset(f"s3://{S3_BUCKET}/{S3_SILVER_PREFIX}")
 
 FEATURE_COLS = [
     'temperature', 'humidity', 'pressure', 'gas_resistance', 'iaq_score',
