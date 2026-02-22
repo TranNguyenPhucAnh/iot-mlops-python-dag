@@ -115,19 +115,16 @@ def load_silver_data(**context):
     temp_hi  = df_combined['temperature'].quantile(0.98)
     temp_lo  = df_combined['temperature'].quantile(0.02)
     hum_hi   = df_combined['humidity'].quantile(0.98)
-    
-    # Thay vì OR 5 điều kiện, ưu tiên 2–3 điều kiện “thực sự xấu”
+
     df_combined['is_anomaly'] = (
         (df_combined['gas_resistance'] < gas_low) |
-        (df_combined['iaq_score']      > iaq_high)
-        #(df_combined['temperature']    > temp_hi)  |
-        #(df_combined['temperature']    < temp_lo)  |
-        #(df_combined['humidity']       > hum_hi)
+        (df_combined['iaq_score']      > iaq_high) |
+        (df_combined['temperature']    > temp_hi)  |
+        (df_combined['temperature']    < temp_lo)  |
+        (df_combined['humidity']       > hum_hi)
     ).astype(int)
 
     anomaly_rate = float(df_combined['is_anomaly'].mean())
-    #limit anomaly_rate về tối đa 10%
-    anomaly_rate = min(anomaly_rate, 0.1)
     logger.info(f"📊 Anomaly rate: {anomaly_rate:.2%}")
 
     if anomaly_rate < 0.02:
