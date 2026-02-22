@@ -275,7 +275,8 @@ default_args = {
 with DAG(
     dag_id='iot_ml_inference_pipeline',
     description='Silver → Inference → Gold',
-    schedule='*/15 * * * *',
+    # schedule='*/15 * * * *',
+    schedule=[SILVER_DATASET], # Inference downstream tự chạy ngay sau mỗi lần Transform upstream ghi Silver xong, không cần quan tâm đến schedule nữa
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
