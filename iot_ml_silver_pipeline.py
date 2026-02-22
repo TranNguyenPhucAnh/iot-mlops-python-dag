@@ -237,12 +237,14 @@ def feature_engineering(**context):
         )
 
     logger.info(f"✅ Feature engineering done — {df.shape[1]} columns, {len(df):,} records")
+    
+    # Trước khi push XCom, convert timestamp sang string
+    df['timestamp'] = df['timestamp'].astype(str)
 
     context['ti'].xcom_push(key='feature_data', value=df.to_dict('records'))
     context['ti'].xcom_push(key='gas_baseline', value=gas_baseline)
 
     return {'record_count': len(df), 'feature_count': df.shape[1]}
-
 
 def write_silver(**context):
     """Ghi Silver Parquet — partition theo year/month/day/hour"""
