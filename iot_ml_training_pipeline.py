@@ -52,7 +52,6 @@ FEATURE_COLS = [
     'iaq_score_rolling_mean', 'iaq_score_rolling_std'
 ]
 
-
 # ==================== Tasks ====================
 
 def load_silver_data(**context):
@@ -139,12 +138,14 @@ def load_silver_data(**context):
         'humidity_p98':       float(hum_hi),
         'anomaly_rate':       anomaly_rate
     }
+    
+    # ✅ Convert timestamp sang string TRƯỚC khi push XCom
+    df_combined['timestamp'] = df_combined['timestamp'].astype(str)
 
     context['ti'].xcom_push(key='silver_data',    value=df_combined[FEATURE_COLS + ['is_anomaly', 'timestamp']].to_dict('records'))
     context['ti'].xcom_push(key='label_thresholds', value=thresholds)
 
     return {'record_count': len(df_combined), 'anomaly_rate': anomaly_rate}
-
 
 def train_anomaly_model(**context):
     logger.info("=" * 60)
@@ -279,7 +280,6 @@ def train_anomaly_model(**context):
 
         return {'run_id': run_id, 'test_roc_auc': roc_auc}
 
-
 def decide_model_registration(**context):
     logger.info("=" * 60)
     logger.info("STEP 3: Model Registration Decision")
@@ -345,7 +345,6 @@ def register_model(**context):
     context['ti'].xcom_push(key='model_version', value=version)
     return {'model_name': REGISTERED_MODEL_NAME, 'version': version, 'stage': 'Staging'}
 
-
 def send_notification(**context):
     logger.info("=" * 60)
     logger.info("STEP 5: Sending Notification")
@@ -378,7 +377,6 @@ def send_notification(**context):
 """
     logger.info(message)
     return message
-
 
 # ==================== DAG ====================
 
