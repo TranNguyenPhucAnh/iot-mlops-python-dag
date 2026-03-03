@@ -1,0 +1,11 @@
+FROM public.ecr.aws/lambda/python:3.12
+
+# Cài đặt thư viện inference nhẹ
+RUN pip install pandas scikit-learn joblib boto3
+
+# Copy mã nguồn xử lý và model file
+COPY app.py ${LAMBDA_TASK_ROOT}
+COPY model.pkl ${LAMBDA_TASK_ROOT}
+COPY scaler.pkl ${LAMBDA_TASK_ROOT}
+
+CMD [ "app.handler" ]
