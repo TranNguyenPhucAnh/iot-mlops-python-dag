@@ -133,13 +133,15 @@ def pull_and_process_sqs(**context):
 
     # ── 1. Pull messages ──────────────────────────────────────────
     all_messages = []
-    max_batches  = 10
-
+   # max_batches  = 10
+    max_batches  = 100
+    
     for batch_num in range(max_batches):
         response = sqs_hook.get_conn().receive_message(
             QueueUrl=SQS_QUEUE_URL,
             MaxNumberOfMessages=10,
-            WaitTimeSeconds=20,
+            #WaitTimeSeconds=20,
+            WaitTimeSeconds=0,
             VisibilityTimeout=300
         )
 
@@ -280,7 +282,8 @@ def pull_and_process_sqs(**context):
 with DAG(
     dag_id='iot_bme680_ingestion_pipeline_v3',
     start_date=datetime(2026, 1, 1),
-    schedule='*/5 * * * *',
+    #schedule='*/5 * * * *',
+    schedule='* * * * *',
     catchup=False,
     max_active_runs=4,
     default_args={
