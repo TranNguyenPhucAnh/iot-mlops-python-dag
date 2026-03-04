@@ -201,7 +201,8 @@ def pull_and_process_sqs(**context):
                 'pressure':        float(sensor_data['pressure']),
                 'gas_resistance':  float(sensor_data['gas_resistance']),
                 'processed_at':    datetime.utcnow().isoformat(),
-                'partition_key':   datetime.utcnow().strftime('year=%Y/month=%m/day=%d/hour=%H')
+                'partition_key':   pd.to_datetime(data.get('timestamp')).strftime('year=%Y/month=%m/day=%d/hour=%H')  # partition tại thời điêm push sqs
+                #'partition_key':  datetime.utcnow().strftime('year=%Y/month=%m/day=%d/hour=%H')                      # partition tại thời điêm airflow process
             })
 
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
@@ -241,13 +242,16 @@ def pull_and_process_sqs(**context):
 
     # ── 4. Save to S3 ─────────────────────────────────────────────
     df  = pd.DataFrame(processed_records)
-    now = datetime.utcnow()
-    s3_path = (
-        f"bronze/bme680/"
-        f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
-        f"hour={now.hour:02d}/"
-        f"data_{now.strftime('%H%M%S')}.parquet"
-    )
+    # Lấy partition từ record đầu tiên trong batch
+    first_partition = raw_records[0]['partition_key']
+    s3_path = f"bronze/bme680/{first_partition}/data_{datetime.utcnow().strftime('%H%M%S')}.parquet"
+    #now = datetime.utcnow()
+    # s3_path = (
+    #     f"bronze/bme680/"
+    #     f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
+    #     f"hour={now.hour:02d}/"
+    #     f"data_{now.strftime('%H%M%S')}.parquet"
+    # )
 
     try:
         buffer = io.BytesIO()
