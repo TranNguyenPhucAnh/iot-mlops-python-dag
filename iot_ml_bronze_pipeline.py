@@ -299,7 +299,7 @@ def pull_and_process_sqs(**context):
 
     partitions_written = []
     for partition_key, group_df in df.groupby('partition_key'):
-        s3_path = build_s3_path(y)
+        s3_path = build_s3_path(partition_key)
         try:
             buffer = io.BytesIO()
             group_df.drop(columns=['partition_key']).to_parquet(
