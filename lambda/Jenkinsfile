@@ -132,7 +132,7 @@ PYEOF
                         echo "📦 Pulling artifacts từ: \${S3_BASE}"
 
                         aws s3 cp "\${S3_BASE}/model.pkl"                    ./model.pkl  --region ${AWS_REGION}
-                        aws s3 cp "\${S3_BASE}/scaler.pkl"                   ./scaler.pkl --region ${AWS_REGION}
+                        aws s3 cp "\${S3_BASE}/preprocessor/scaler.pkl"      ./scaler.pkl --region ${AWS_REGION}
 
                         echo "✅ model.pkl  : \$(du -sh model.pkl  | cut -f1)"
                         echo "✅ scaler.pkl : \$(du -sh scaler.pkl | cut -f1)"
