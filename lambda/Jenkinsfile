@@ -1,0 +1,356 @@
+pipeline {
+    agent any
+
+    // ──────────────────────────────────────────────
+    // Thay các giá trị này theo môi trường của bạn
+    // ──────────────────────────────────────────────
+    environment {
+        AWS_REGION          = "ap-southeast-1"                          // Region của ECR + Lambda
+        AWS_ACCOUNT_ID      = "408279620390"                            // AWS Account ID
+        ECR_REPO_NAME       = "iot-bme680"                              // Tên ECR repository
+        LAMBDA_FUNCTION_NAME = "aqi-prediction-lambda"                  // Tên Lambda function
+        IMAGE_TAG           = "latest"                                  // hoặc dùng "${BUILD_NUMBER}" để versioning
+
+        // Full ECR URI — tự động ghép từ các biến trên, không cần sửa
+        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+    }
+
+    // Manual trigger only — không poll SCM
+    triggers {}
+
+    options {
+        // Giữ tối đa 10 build log, tránh tốn disk
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        // Timeout toàn bộ pipeline: 30 phút
+        timeout(time: 30, unit: 'MINUTES')
+        // Không chạy concurrent build cùng lúc
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    stages {
+
+        // ── Stage 1: Checkout ──────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Checked out branch: ${env.GIT_BRANCH}"
+                echo "   Commit: ${env.GIT_COMMIT}"
+            }
+        }
+
+        // ── Stage 2: Validate required files ──────────────────────
+        stage('Validate') {
+            steps {
+                script {
+                    def required = ['Dockerfile', 'app.py']
+                    for (f in required) {
+                        if (!fileExists(f)) {
+                            error "❌ File bắt buộc không tồn tại: ${f}"
+                        }
+                    }
+                    echo "✅ Tất cả files bắt buộc đều có mặt"
+                }
+            }
+        }
+
+        // ── Stage 3: Query MLflow API → lấy run_id mới nhất → pull từ S3 ──
+        stage('Pull Model Artifacts') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh """
+                        echo "🔍 Querying MLflow API for latest Production model..."
+
+                        # ── Bước 1: Lấy run_id của version mới nhất ở stage Production ──
+                        # Nếu chưa có Production, thử Staging
+                        RUN_ID=\$(python3 - <<'PYEOF'
+import urllib.request, json, sys
+
+MLFLOW_URI    = "http://mlflow.mlflow.svc.cluster.local:80"
+MODEL_NAME    = "bme680-anomaly-detector"
+
+def get_run_id(stage):
+    url = (
+        f"{MLFLOW_URI}/api/2.0/mlflow/registered-models/get-latest-versions"
+        f"?name={MODEL_NAME}&stages={stage}"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            data = json.loads(r.read())
+        versions = data.get("model_versions", [])
+        if versions:
+            run_id = versions[0]["run_id"]
+            version = versions[0]["version"]
+            print(f"[INFO] Found {stage} version={version} run_id={run_id}", file=sys.stderr)
+            return run_id
+    except Exception as e:
+        print(f"[WARN] Could not fetch {stage}: {e}", file=sys.stderr)
+    return None
+
+run_id = get_run_id("Production") or get_run_id("Staging")
+
+if not run_id:
+    print("[ERROR] Không tìm thấy model ở Production hoặc Staging", file=sys.stderr)
+    sys.exit(1)
+
+print(run_id)   # stdout → được capture vào RUN_ID
+PYEOF
+)
+
+                        if [ -z "\$RUN_ID" ]; then
+                            echo "❌ Không lấy được run_id từ MLflow"
+                            exit 1
+                        fi
+                        echo "✅ run_id = \$RUN_ID"
+
+                        # ── Bước 2: Lấy experiment_id từ run_id ──────────────────────
+                        EXPERIMENT_ID=\$(python3 - <<PYEOF
+import urllib.request, json, sys
+
+MLFLOW_URI = "http://mlflow.mlflow.svc.cluster.local:80"
+run_id     = "${RUN_ID}"
+
+url = f"{MLFLOW_URI}/api/2.0/mlflow/runs/get?run_id={run_id}"
+with urllib.request.urlopen(url, timeout=10) as r:
+    data = json.loads(r.read())
+
+exp_id = data["run"]["info"]["experiment_id"]
+print(exp_id)
+PYEOF
+)
+                        echo "✅ experiment_id = \$EXPERIMENT_ID"
+
+                        # ── Bước 3: Ghép S3 path và pull artifacts ───────────────────
+                        # Format: s3://<bucket>/mlflow-artifacts/<exp_id>/models/<run_id>/artifacts/
+                        S3_BASE="s3://iot-bme680-data-lake-prod/mlflow-artifacts/\${EXPERIMENT_ID}/models/\${RUN_ID}/artifacts"
+
+                        echo "📦 Pulling artifacts từ: \${S3_BASE}"
+
+                        aws s3 cp "\${S3_BASE}/model.pkl"                    ./model.pkl  --region ${AWS_REGION}
+                        aws s3 cp "\${S3_BASE}/scaler.pkl"                   ./scaler.pkl --region ${AWS_REGION}
+
+                        echo "✅ model.pkl  : \$(du -sh model.pkl  | cut -f1)"
+                        echo "✅ scaler.pkl : \$(du -sh scaler.pkl | cut -f1)"
+
+                        # Validate artifacts hợp lệ
+                        python3 -c "
+import joblib, sys
+try:
+    m = joblib.load('model.pkl')
+    s = joblib.load('scaler.pkl')
+    assert hasattr(m, 'predict'), 'model.pkl không có method predict'
+    assert hasattr(s, 'transform'), 'scaler.pkl không có method transform'
+    print(f'✅ Artifacts validated | model={type(m).__name__} | scaler={type(s).__name__}')
+except Exception as e:
+    print(f'❌ Artifact validation failed: {e}')
+    sys.exit(1)
+"
+
+                        # Lưu run_id để dùng ở các stage sau (build label, notify)
+                        echo "\$RUN_ID" > .mlflow_run_id
+                    """
+                }
+            }
+        }
+
+        // ── Stage 4: Login vào ECR ─────────────────────────────────
+        stage('ECR Login') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh """
+                        echo "🔐 Logging in to ECR..."
+                        aws ecr get-login-password --region ${AWS_REGION} \
+                            | docker login --username AWS --password-stdin ${ECR_URI}
+                        echo "✅ ECR login successful"
+                    """
+                }
+            }
+        }
+
+        // ── Stage 5: Build Docker image (ARM64) ────────────────────────────
+        stage('Docker Build') {
+            steps {
+                sh '''
+                    # Setup multi-platform build (chỉ chạy lần đầu hoặc khi cần)
+                    docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
+                    docker buildx create --name arm64builder --driver docker-container --use || true
+                    docker buildx inspect --bootstrap
+        
+                    MLFLOW_RUN_ID=$(cat .mlflow_run_id)
+                    echo "🐳 Building Docker image for linux/arm64..."
+                    docker buildx build \\
+                        --platform linux/arm64 \\
+                        --load \\
+                        --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
+                        --build-arg GIT_COMMIT=${GIT_COMMIT} \\
+                        --label mlflow.run_id=${MLFLOW_RUN_ID} \\
+                        -t ${ECR_URI}:${IMAGE_TAG}-arm64 \\
+                        -t ${ECR_URI}:build-${BUILD_NUMBER}-arm64 \\
+                        .
+                    echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}-arm64"
+                    echo "   MLflow run_id : ${MLFLOW_RUN_ID}"
+                '''
+            }
+        }
+
+        // ── Stage 6: Test image trước khi push ────────────────────
+        stage('Smoke Test') {
+            steps {
+                sh """
+                    echo "🧪 Running smoke test..."
+
+                    # Chạy container test — invoke handler với payload mẫu
+                    # Lambda Runtime Interface Emulator (RIE) không bắt buộc ở đây,
+                    # chỉ kiểm tra import không bị lỗi và model load được
+                    docker run --rm \
+                        --entrypoint python \
+                        ${ECR_URI}:${IMAGE_TAG} \
+                        -c "
+import joblib, os, sys
+model  = joblib.load('model.pkl')
+scaler = joblib.load('scaler.pkl')
+import numpy as np
+sample = scaler.transform([[25.0, 60.0, 1013.0, 50000.0]])
+pred   = model.predict(sample)
+score  = model.decision_function(sample)
+assert pred[0] in [-1, 1], 'predict() phải trả về -1 hoặc 1'
+print(f'✅ Smoke test passed | pred={pred[0]} | score={score[0]:.4f}')
+sys.exit(0)
+"
+                    echo "✅ Smoke test passed"
+                """
+            }
+        }
+
+        // ── Stage 7: Push lên ECR ──────────────────────────────────
+        stage('ECR Push') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh """
+                        echo "🚀 Pushing image to ECR..."
+                        docker push ${ECR_URI}:${IMAGE_TAG}
+                        docker push ${ECR_URI}:build-${BUILD_NUMBER}
+                        echo "✅ Push complete"
+                        echo "   latest      → ${ECR_URI}:${IMAGE_TAG}"
+                        echo "   versioned   → ${ECR_URI}:build-${BUILD_NUMBER}"
+                    """
+                }
+            }
+        }
+
+        // ── Stage 8: Update Lambda function ───────────────────────
+        stage('Deploy to Lambda') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh """
+                        echo "⚡ Updating Lambda function: ${LAMBDA_FUNCTION_NAME}..."
+                        aws lambda update-function-code \
+                            --function-name ${LAMBDA_FUNCTION_NAME} \
+                            --image-uri     ${ECR_URI}:${IMAGE_TAG} \
+                            --region        ${AWS_REGION}
+
+                        echo "⏳ Waiting for Lambda update to complete..."
+                        aws lambda wait function-updated \
+                            --function-name ${LAMBDA_FUNCTION_NAME} \
+                            --region        ${AWS_REGION}
+
+                        echo "✅ Lambda updated successfully"
+                    """
+                }
+            }
+        }
+
+        // ── Stage 9: Verify Lambda sau deploy ─────────────────────
+        stage('Verify Lambda') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials',
+                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                ]]) {
+                    sh """
+                        echo "🔍 Verifying Lambda deployment..."
+
+                        # Invoke Lambda với payload test
+                        aws lambda invoke \
+                            --function-name ${LAMBDA_FUNCTION_NAME} \
+                            --region        ${AWS_REGION} \
+                            --payload       '{"body": "{\\"T\\": 25.0, \\"H\\": 60.0, \\"P\\": 1013.0, \\"G\\": 50000.0}"}' \
+                            --cli-binary-format raw-in-base64-out \
+                            /tmp/lambda_response.json
+
+                        echo "📋 Lambda response:"
+                        cat /tmp/lambda_response.json
+
+                        # Kiểm tra statusCode = 200
+                        STATUS=\$(python3 -c "
+import json
+with open('/tmp/lambda_response.json') as f:
+    resp = json.load(f)
+body = json.loads(resp.get('body', '{}'))
+print(resp.get('statusCode', 500))
+")
+                        if [ "\$STATUS" != "200" ]; then
+                            echo "❌ Lambda verification failed — statusCode=\$STATUS"
+                            exit 1
+                        fi
+                        echo "✅ Lambda verification passed — statusCode=200"
+                    """
+                }
+            }
+        }
+    }
+
+    // ── Post actions ───────────────────────────────────────────────
+    post {
+        success {
+            echo """
+╔══════════════════════════════════════════════╗
+║  ✅  DEPLOYMENT SUCCESSFUL                   ║
+╠══════════════════════════════════════════════╣
+║  Image   : ${ECR_URI}:${IMAGE_TAG}
+║  Lambda  : ${LAMBDA_FUNCTION_NAME}
+║  Build # : ${BUILD_NUMBER}
+║  Region  : ${AWS_REGION}
+╚══════════════════════════════════════════════╝
+"""
+        }
+
+        failure {
+            echo "❌ Pipeline failed at stage — xem logs bên trên để debug"
+            // TODO: Thêm Slack/SNS notification ở đây nếu cần
+            // slackSend channel: '#iot-alerts', message: "❌ Build #${BUILD_NUMBER} failed"
+        }
+
+        always {
+            // Dọn dẹp local Docker images sau mỗi build tránh tốn disk
+            sh """
+                docker rmi ${ECR_URI}:${IMAGE_TAG}       || true
+                docker rmi ${ECR_URI}:build-${BUILD_NUMBER} || true
+                docker image prune -f                    || true
+            """
+            echo "🧹 Docker cleanup complete"
+        }
+    }
+}
