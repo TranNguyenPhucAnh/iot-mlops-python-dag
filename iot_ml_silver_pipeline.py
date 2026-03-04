@@ -11,6 +11,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.exceptions import AirflowSkipException
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+from airflow.models.param import Param
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
@@ -24,6 +25,30 @@ S3_BUCKET        = "iot-bme680-data-lake-prod"
 S3_BRONZE_PREFIX = "bronze/bme680/"
 S3_SILVER_PREFIX = "silver/bme680_features/"
 SILVER_DATASET = Dataset(f"s3://{S3_BUCKET}/{S3_SILVER_PREFIX}")
+
+# ==================== DAG Params ====================
+dag_params = {
+    "lookback_hours": Param(
+        default=2,
+        type="integer",
+        description=(
+            "Số giờ nhìn lại để đọc Bronze files. "
+            "Mặc định 2h cho real-time. "
+            "Tăng lên khi backfill historical data (ví dụ 48 = 2 ngày)."
+        ),
+        minimum=1,
+        maximum=720,
+    ),
+    "backfill_from_date": Param(
+        default="",
+        type="string",
+        description=(
+            "Backfill từ ngày cụ thể, format 'YYYY-MM-DD HH:MM'. "
+            "Nếu điền thì override lookback_hours, tự tính số giờ từ đó đến now. "
+            "Để trống để dùng lookback_hours bình thường."
+        ),
+    ),
+}
 
 # Validation ranges
 VALIDATION_RULES = {
@@ -59,15 +84,15 @@ def calc_iaq_score(gas_resistance: float, humidity: float, gas_baseline: float) 
     return round(min(IAQ_MAX_SCORE, gas_score + hum_score), 2)
 
 
-def list_bronze_files(s3_hook, execution_date) -> list[str]:
+def list_bronze_files(s3_hook, execution_date, lookback_hours: int = 2) -> list[str]:
     """
-    List tất cả Parquet files trong Bronze layer của 2 giờ gần nhất.
-    Transform chạy mỗi 30 phút → lấy 2 giờ để đảm bảo không miss data.
+    List tất cả Parquet files trong Bronze layer.
+    lookback_hours: số giờ nhìn lại — configurable qua DAG params.
     """
     files = []
-    now = execution_date
+    now   = execution_date
 
-    for hours_back in range(2):
+    for hours_back in range(lookback_hours):
         check_dt = now - timedelta(hours=hours_back)
         prefix   = (
             f"{S3_BRONZE_PREFIX}"
@@ -88,15 +113,34 @@ def list_bronze_files(s3_hook, execution_date) -> list[str]:
 # ==================== Tasks ====================
 
 def extract_bronze(**context):
-    """Đọc Bronze files từ 2 giờ gần nhất"""
+    """Đọc Bronze files theo lookback_hours hoặc backfill_from_date"""
     logger.info("=" * 60)
     logger.info("STEP 1: Extract từ Bronze layer")
     logger.info("=" * 60)
 
+    params         = context['params']
+    lookback_hours = params['lookback_hours']
+    backfill_from  = params.get('backfill_from_date', '').strip()
+
     s3_hook        = S3Hook(aws_conn_id='aws_default')
     execution_date = context.get('logical_date') or context.get('execution_date')
 
-    bronze_files = list_bronze_files(s3_hook, execution_date)
+    # Override nếu có backfill_from_date
+    if backfill_from:
+        try:
+            backfill_dt    = datetime.strptime(backfill_from, '%Y-%m-%d %H:%M')
+            lookback_hours = int((datetime.utcnow() - backfill_dt).total_seconds() / 3600) + 1
+            execution_date = datetime.utcnow()
+            logger.info(f"BACKFILL MODE — từ {backfill_from}, lookback={lookback_hours}h")
+        except ValueError:
+            logger.warning(
+                f"Invalid backfill_from_date format: '{backfill_from}' "
+                f"(expect 'YYYY-MM-DD HH:MM'). Dùng lookback_hours={lookback_hours}"
+            )
+    else:
+        logger.info(f"Normal mode — lookback_hours={lookback_hours}")
+
+    bronze_files = list_bronze_files(s3_hook, execution_date, lookback_hours)
 
     if not bronze_files:
         logger.warning("⚠️ Không có Bronze files mới — skip")
@@ -308,6 +352,7 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     default_args=default_args,
+    params=dag_params,
     tags=['iot', 'silver', 'transform', 'feature-engineering']
 ) as dag:
 
