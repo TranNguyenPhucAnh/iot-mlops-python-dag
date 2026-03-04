@@ -455,15 +455,6 @@ def train_anomaly_model(**context):
         joblib.dump(scaler, scaler_path)
         mlflow.log_artifact(scaler_path, artifact_path='preprocessor')
 
-        # THÊM: export ra S3 để CI/CD pipeline lấy về build Docker image
-        s3_hook = S3Hook(aws_conn_id='aws_default')
-        s3_hook.load_file(
-            filename=scaler_path,
-            key=f"models/latest/scaler.pkl",
-            bucket_name=S3_BUCKET,
-            replace=True
-        )
-
         mlflow.sklearn.log_model(
             sk_model=model,
             artifact_path='model',
