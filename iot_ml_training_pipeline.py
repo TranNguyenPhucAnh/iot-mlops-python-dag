@@ -52,15 +52,13 @@ MIN_RECALL    = 0.50
 
 # ── Domain-rule thresholds ───────────────────────────────────
 DOMAIN_THRESHOLDS = {
-    # Người mũi nhạy: iaq > p90 của baseline là cảm nhận được
-    'iaq_score_max':    75.0,   # p98=84.5, p90 ~70-75
-
-    # Nhiệt độ & độ ẩm — data thực tế: temp 28-31, humidity 61-75
-    # Người nhạy cảm sẽ thấy khó chịu khi lệch nhẹ khỏi comfortable zone
-    'temperature_max':  31.0,   # max thực tế 31.6 — trên này là nóng hơn bình thường
-    'temperature_min':  27.0,   # dưới này là lạnh hơn bình thường (điều hòa mạnh)
-    'humidity_max':     74.0,   # p98=74.2 — trên này là ẩm hơn bình thường
-    'humidity_min':     62.0,   # p02=62.3 — dưới này là khô hơn bình thường
+    'iaq_score_max':    150.0,   # WHO: >150 Unhealthy (dùng iaq_score từ Silver, không tính lại)
+    'temperature_max':   35.0,   # Trong nhà bất thường
+    'temperature_min':   20.0,   # Quá lạnh
+    'humidity_max':      80.0,   # Nguy cơ mốc
+    'humidity_min':      20.0,   # Quá khô
+    # gas_resistance KHÔNG đặt ở đây vì iaq_score đã encode gas + humidity rồi
+    # → tránh double counting và tránh vấn đề baseline drift giữa các DAG
 }
 
 FEATURE_COLS = [
