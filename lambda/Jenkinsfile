@@ -139,7 +139,8 @@ except Exception as e:
                                 --label mlflow.run_id=${MLFLOW_RUN_ID} \\
                                 -t ${ECR_URI}:${IMAGE_TAG}-arm64 \\
                                 -t ${ECR_URI}:build-${BUILD_NUMBER}-arm64 \\
-                                .
+                                lambda/
+                                 
                             echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}-arm64"
                             echo "   MLflow run_id : ${MLFLOW_RUN_ID}"
 
