@@ -205,15 +205,22 @@ print(f'Smoke test passed | pred={pred[0]}')
 
                         echo "🔍 Verifying Lambda deployment..."
 
-                        # Ghi payload ra file để tránh escaping hell với shell quotes
-                        cat > /tmp/lambda_payload.json << 'PAYLOAD'
-{"body": "{\"T\": 25.0, \"H\": 60.0, \"P\": 1013.0, \"G\": 50000.0}"}
-PAYLOAD
+                        # Ghi payload ra file bằng python để đảm bảo JSON hợp lệ
+                        python3 -c "
+import json
+payload = {'body': json.dumps({'T': 25.0, 'H': 60.0, 'P': 1013.0, 'G': 50000.0})}
+with open('/tmp/lambda_payload.json', 'w') as f:
+    json.dump(payload, f)
+print('Payload written:', json.dumps(payload))
+"
+                        echo "📋 Payload content:"
+                        cat /tmp/lambda_payload.json
 
                         aws lambda invoke \
                             --function-name aqi-prediction-lambda \
                             --region        ap-southeast-1 \
-                            --payload       fileb:///tmp/lambda_payload.json \
+                            --cli-binary-format raw-in-base64-out \
+                            --payload       file:///tmp/lambda_payload.json \
                             /tmp/lambda_response.json
 
                         echo "📋 Lambda response:"
