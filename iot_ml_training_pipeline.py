@@ -324,6 +324,12 @@ def train_anomaly_model(**context):
         joblib.dump(scaler, scaler_path)
         mlflow.log_artifact(scaler_path, artifact_path='preprocessor')
 
+        # Sau khi train xong, export ra path cố định để Jenkins lấy
+        s3_hook = S3Hook(aws_conn_id='aws_default')
+        joblib.dump(model, '/tmp/model.pkl')
+        s3_hook.load_file('/tmp/model.pkl',  'models/latest/model.pkl',  bucket_name=S3_BUCKET, replace=True)
+        s3_hook.load_file(scaler_path,       'models/latest/scaler.pkl', bucket_name=S3_BUCKET, replace=True)
+      
         mlflow.sklearn.log_model(
             sk_model=model,
             artifact_path='model',
