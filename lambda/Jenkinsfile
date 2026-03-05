@@ -15,9 +15,6 @@ pipeline {
         ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
     }
 
-    // Manual trigger only — không poll SCM
-    triggers {}
-
     options {
         // Giữ tối đa 10 build log, tránh tốn disk
         buildDiscarder(logRotator(numToKeepStr: '10'))
@@ -105,22 +102,29 @@ except Exception as e:
             }
         }
 
-        // ── Stage 5: Build Docker image ────────────────────────────
+        // ── Stage 5: Build Docker image (ARM64) ────────────────────────────
         stage('Docker Build') {
             steps {
-                sh """
-                    MLFLOW_RUN_ID=\$(cat .mlflow_run_id)
-                    echo "🐳 Building Docker image..."
-                    docker build \\
-                        --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
+                sh '''
+                    # Setup multi-platform build (chỉ chạy lần đầu hoặc khi cần)
+                    docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
+                    docker buildx create --name arm64builder --driver docker-container --use || true
+                    docker buildx inspect --bootstrap
+        
+                    MLFLOW_RUN_ID=$(cat .mlflow_run_id)
+                    echo "🐳 Building Docker image for linux/arm64..."
+                    docker buildx build \\
+                        --platform linux/arm64 \\
+                        --load \\
+                        --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
                         --build-arg GIT_COMMIT=${GIT_COMMIT} \\
-                        --label     mlflow.run_id=\${MLFLOW_RUN_ID} \\
-                        -t ${ECR_URI}:${IMAGE_TAG} \\
-                        -t ${ECR_URI}:build-${BUILD_NUMBER} \\
+                        --label mlflow.run_id=${MLFLOW_RUN_ID} \\
+                        -t ${ECR_URI}:${IMAGE_TAG}-arm64 \\
+                        -t ${ECR_URI}:build-${BUILD_NUMBER}-arm64 \\
                         .
-                    echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}"
-                    echo "   MLflow run_id : \${MLFLOW_RUN_ID}"
-                """
+                    echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}-arm64"
+                    echo "   MLflow run_id : ${MLFLOW_RUN_ID}"
+                '''
             }
         }
 
