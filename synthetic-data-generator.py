@@ -98,7 +98,7 @@ def generate_anomaly_reading(ts: datetime, scenario: str) -> dict:
 
     elif scenario == 'extreme_heat':
         # Thiết bị quá nhiệt hoặc mở cửa trời nắng
-        temperature    = random.uniform(32.5, 35.0)    # trên threshold 32.0
+        temperature = random.uniform(34.0, 36.0)
 
     elif scenario == 'high_iaq':
         # Không khí kém: kết hợp gas thấp + humidity cao
