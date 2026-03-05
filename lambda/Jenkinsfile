@@ -139,15 +139,8 @@ except Exception as e:
                             aws ecr get-login-password --region ap-southeast-1 \
                                 | docker login --username AWS --password-stdin 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680
 
-                            echo "⚙️  Setup multi-platform buildx..."
-                            docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
-                            docker buildx create --name arm64builder --driver docker-container --use || true
-                            docker buildx inspect --bootstrap
-
-                            echo "🐳 Building Docker image for linux/arm64..."
-                            docker buildx build \
-                                --platform linux/arm64 \
-                                --load \
+                            echo "🐳 Building Docker image..."
+                            docker build \
                                 --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
                                 --build-arg GIT_COMMIT=$GIT_COMMIT \
                                 -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG \
