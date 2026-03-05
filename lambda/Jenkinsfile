@@ -74,12 +74,13 @@ spec:
         }
 
         // ── Stage 3: Pull model artifacts từ S3 ───────────────────
+        // Pull bằng container docker (có aws-cli), validate bằng container python
         stage('Pull Model Artifacts') {
             steps {
+                // Bước 1: Pull từ S3 — dùng container docker vì có IRSA + aws-cli
                 container('docker') {
                     sh '''
-                        apk add --no-cache aws-cli python3 py3-pip
-                        pip install joblib scikit-learn --quiet --only-binary=:all:
+                        apk add --no-cache aws-cli
 
                         echo "📦 Pulling model artifacts từ S3..."
                         aws s3 cp s3://iot-bme680-data-lake-prod/models/latest/model.pkl  ./model.pkl  --region ap-southeast-1
@@ -87,6 +88,16 @@ spec:
 
                         echo "✅ model.pkl  : $(du -sh model.pkl  | cut -f1)"
                         echo "✅ scaler.pkl : $(du -sh scaler.pkl | cut -f1)"
+
+                        cp model.pkl  lambda/model.pkl
+                        cp scaler.pkl lambda/scaler.pkl
+                        echo "✅ Copied artifacts vào lambda/"
+                    '''
+                }
+                // Bước 2: Validate — dùng container python (có pip, wheel sẵn cho linux/amd64)
+                container('python') {
+                    sh '''
+                        pip install joblib scikit-learn --quiet
 
                         python3 -c "
 import joblib, sys
@@ -100,9 +111,6 @@ except Exception as e:
     print(f'Artifact validation failed: {e}')
     sys.exit(1)
 "
-                        cp model.pkl  lambda/model.pkl
-                        cp scaler.pkl lambda/scaler.pkl
-                        echo "✅ Copied artifacts vào lambda/"
                     '''
                 }
             }
