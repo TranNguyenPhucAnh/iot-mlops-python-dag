@@ -52,15 +52,11 @@ MIN_RECALL    = 0.50
 
 # ── Domain-rule thresholds ───────────────────────────────────
 DOMAIN_THRESHOLDS = {
-    # Người mũi nhạy: iaq > p90 của baseline là cảm nhận được
-    'iaq_score_max':    75.0,   # p98=84.5, p90 ~70-75
-
-    # Nhiệt độ & độ ẩm — data thực tế: temp 28-31, humidity 61-75
-    # Người nhạy cảm sẽ thấy khó chịu khi lệch nhẹ khỏi comfortable zone
-    'temperature_max':  31.0,   # max thực tế 31.6 — trên này là nóng hơn bình thường
-    'temperature_min':  27.0,   # dưới này là lạnh hơn bình thường (điều hòa mạnh)
-    'humidity_max':     74.0,   # p98=74.2 — trên này là ẩm hơn bình thường
-    'humidity_min':     62.0,   # p02=62.3 — dưới này là khô hơn bình thường
+    'iaq_score_max':   150.0,
+    'temperature_max':  33.0,   # ← tăng từ 31 lên 33
+    'temperature_min':  28.0,   # ← hạ từ 27 xuống 28
+    'humidity_max':     70.0,   # ← tăng từ 74 lên 70 (thực tế max=67.4)
+    'humidity_min':     60.0,   # ← hạ từ 62 xuống 60
 }
 
 FEATURE_COLS = [
