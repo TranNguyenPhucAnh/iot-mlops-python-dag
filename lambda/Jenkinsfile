@@ -25,7 +25,6 @@ pipeline {
         timeout(time: 30, unit: 'MINUTES')
         // Không chạy concurrent build cùng lúc
         disableConcurrentBuilds()
-        timestamps()
     }
 
     stages {
