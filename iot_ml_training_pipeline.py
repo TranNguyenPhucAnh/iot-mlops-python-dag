@@ -278,11 +278,13 @@ def train_anomaly_model(**context):
         logger.info("\n=== Model Performance ===")
         logger.info(f"  {'Metric':<20} {'Train':>12} {'Test':>12}  {'Threshold':>10}")
         logger.info(f"  {'-'*58}")
-        logger.info(f"  {'ROC-AUC':<20} {'N/A':>12} {roc_auc:>12.4f}  {MIN_ROC_AUC:>10}")
+        logger.info(f"  {'ROC-AUC':<20} {'N/A':>12} {roc_auc:>12.4f}")
         logger.info(f"  {'Precision':<20} {train_metrics['train_precision']:>12.4f} "
                     f"{test_metrics['test_precision']:>12.4f}  {MIN_PRECISION:>10}")
         logger.info(f"  {'Recall':<20} {train_metrics['train_recall']:>12.4f} "
-                    f"{test_metrics['test_recall']:>12.4f}  {MIN_RECALL:>10}")
+                    f"{test_metrics['test_recall']:>12.4f}")
+        logger.info(f"  {'F1':<20} {train_metrics['train_f1']:>12.4f} "
+                    f"{test_metrics['test_f1']:>12.4f}  {MIN_F1:>10}")
         logger.info(f"  {'F1':<20} {train_metrics['train_f1']:>12.4f} "
                     f"{test_metrics['test_f1']:>12.4f}")
         logger.info(f"  {'Accuracy':<20} {train_metrics['train_accuracy']:>12.4f} "
