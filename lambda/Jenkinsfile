@@ -54,7 +54,7 @@ pipeline {
             }
         }
 
-        // ── Stage 3: Query MLflow API → lấy run_id mới nhất → pull từ S3 ──
+        // ── Stage 3: Query MLflow API → lấy cả 2 artifact URI → pull từ S3 ──
         stage('Pull Model Artifacts') {
             steps {
                 withCredentials([[
@@ -64,99 +64,91 @@ pipeline {
                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
                 ]]) {
                     sh """
-                        echo "🔍 Querying MLflow API for latest Production model..."
+                        echo "🔍 Querying MLflow API for latest model artifacts..."
 
-                        # ── Bước 1: Lấy run_id của version mới nhất ở stage Production ──
-                        # Nếu chưa có Production, thử Staging
-                        RUN_ID=\$(python3 - <<'PYEOF'
-import urllib.request, json, sys
+                        python3 - <<'PYEOF'
+import urllib.request, json, sys, subprocess
 
-MLFLOW_URI    = "http://mlflow.mlflow.svc.cluster.local:80"
-MODEL_NAME    = "bme680-anomaly-detector"
+MLFLOW_URI = "http://mlflow.mlflow.svc.cluster.local:80"
+MODEL_NAME = "bme680-anomaly-detector"
+AWS_REGION = "ap-southeast-1"
 
-def get_run_id(stage):
-    url = (
-        f"{MLFLOW_URI}/api/2.0/mlflow/registered-models/get-latest-versions"
-        f"?name={MODEL_NAME}&stages={stage}"
-    )
-    try:
-        with urllib.request.urlopen(url, timeout=10) as r:
-            data = json.loads(r.read())
-        versions = data.get("model_versions", [])
-        if versions:
-            run_id = versions[0]["run_id"]
-            version = versions[0]["version"]
-            print(f"[INFO] Found {stage} version={version} run_id={run_id}", file=sys.stderr)
-            return run_id
-    except Exception as e:
-        print(f"[WARN] Could not fetch {stage}: {e}", file=sys.stderr)
-    return None
+def api(path):
+    with urllib.request.urlopen(f"{MLFLOW_URI}/api/2.0/mlflow/{path}", timeout=10) as r:
+        return json.loads(r.read())
 
-run_id = get_run_id("Production") or get_run_id("Staging")
+# ── Bước 1: Lấy model version mới nhất (Production → fallback Staging) ───────
+version_info = None
+for stage in ["Production", "Staging"]:
+    data = api(f"registered-models/get-latest-versions?name={MODEL_NAME}&stages={stage}")
+    versions = data.get("model_versions", [])
+    if versions:
+        version_info = versions[0]
+        print(f"[INFO] Found {stage} version={version_info['version']} run_id={version_info['run_id']}", file=sys.stderr)
+        break
 
-if not run_id:
+if not version_info:
     print("[ERROR] Không tìm thấy model ở Production hoặc Staging", file=sys.stderr)
     sys.exit(1)
 
-print(run_id)   # stdout → được capture vào RUN_ID
+run_id        = version_info["run_id"]
+# source uri của model version — đây chính là path chứa model.pkl
+# vd: s3://bucket/mlflow-artifacts/1/models/m-<hash>/artifacts/model
+model_uri     = version_info["source"]
+
+# ── Bước 2: Lấy artifact_uri của run — đây là root chứa scaler.pkl ───────────
+run_data      = api(f"runs/get?run_id={run_id}")
+artifact_uri  = run_data["run"]["info"]["artifact_uri"]
+# vd: s3://bucket/mlflow-artifacts/1/{run_id}/artifacts
+
+# ── Bước 3: Ghép S3 path chính xác ───────────────────────────────────────────
+# model.pkl nằm trong source của model version (có dạng m-<hash>)
+model_s3  = f"{model_uri}/model.pkl"
+
+# scaler.pkl nằm trong artifact_uri của run (run_id folder)
+scaler_s3 = f"{artifact_uri}/preprocessor/scaler.pkl"
+
+print(f"[INFO] model_s3  = {model_s3}",  file=sys.stderr)
+print(f"[INFO] scaler_s3 = {scaler_s3}", file=sys.stderr)
+
+# ── Bước 4: Pull về workspace ─────────────────────────────────────────────────
+for s3_path, local in [(model_s3, "model.pkl"), (scaler_s3, "scaler.pkl")]:
+    print(f"[INFO] Downloading {s3_path} → {local}", file=sys.stderr)
+    result = subprocess.run(
+        ["aws", "s3", "cp", s3_path, local, "--region", AWS_REGION],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"[ERROR] aws s3 cp failed: {result.stderr}", file=sys.stderr)
+        sys.exit(1)
+    print(f"[INFO] ✅ Downloaded {local}", file=sys.stderr)
+
+# ── Bước 5: Validate ──────────────────────────────────────────────────────────
+import joblib
+try:
+    m = joblib.load("model.pkl")
+    s = joblib.load("scaler.pkl")
+    assert hasattr(m, "predict"),   "model.pkl không có method predict"
+    assert hasattr(s, "transform"), "scaler.pkl không có method transform"
+    print(f"[INFO] ✅ Artifacts validated | model={type(m).__name__} scaler={type(s).__name__}", file=sys.stderr)
+except Exception as e:
+    print(f"[ERROR] Artifact validation failed: {e}", file=sys.stderr)
+    sys.exit(1)
+
+# Lưu run_id ra file để các stage sau dùng
+with open(".mlflow_run_id", "w") as f:
+    f.write(run_id)
+
+print(f"[INFO] run_id saved → .mlflow_run_id", file=sys.stderr)
 PYEOF
-)
-
-                        if [ -z "\$RUN_ID" ]; then
-                            echo "❌ Không lấy được run_id từ MLflow"
-                            exit 1
-                        fi
-                        echo "✅ run_id = \$RUN_ID"
-
-                        # ── Bước 2: Lấy experiment_id từ run_id ──────────────────────
-                        EXPERIMENT_ID=\$(python3 - <<PYEOF
-import urllib.request, json, sys
-
-MLFLOW_URI = "http://mlflow.mlflow.svc.cluster.local:80"
-run_id     = "${RUN_ID}"
-
-url = f"{MLFLOW_URI}/api/2.0/mlflow/runs/get?run_id={run_id}"
-with urllib.request.urlopen(url, timeout=10) as r:
-    data = json.loads(r.read())
-
-exp_id = data["run"]["info"]["experiment_id"]
-print(exp_id)
-PYEOF
-)
-                        echo "✅ experiment_id = \$EXPERIMENT_ID"
-
-                        # ── Bước 3: Ghép S3 path và pull artifacts ───────────────────
-                        # Format: s3://<bucket>/mlflow-artifacts/<exp_id>/models/<run_id>/artifacts/
-                        S3_BASE="s3://iot-bme680-data-lake-prod/mlflow-artifacts/\${EXPERIMENT_ID}/models/\${RUN_ID}/artifacts"
-
-                        echo "📦 Pulling artifacts từ: \${S3_BASE}"
-
-                        aws s3 cp "\${S3_BASE}/model.pkl"                    ./model.pkl  --region ${AWS_REGION}
-                        aws s3 cp "\${S3_BASE}/preprocessor/scaler.pkl"      ./scaler.pkl --region ${AWS_REGION}
 
                         echo "✅ model.pkl  : \$(du -sh model.pkl  | cut -f1)"
                         echo "✅ scaler.pkl : \$(du -sh scaler.pkl | cut -f1)"
-
-                        # Validate artifacts hợp lệ
-                        python3 -c "
-import joblib, sys
-try:
-    m = joblib.load('model.pkl')
-    s = joblib.load('scaler.pkl')
-    assert hasattr(m, 'predict'), 'model.pkl không có method predict'
-    assert hasattr(s, 'transform'), 'scaler.pkl không có method transform'
-    print(f'✅ Artifacts validated | model={type(m).__name__} | scaler={type(s).__name__}')
-except Exception as e:
-    print(f'❌ Artifact validation failed: {e}')
-    sys.exit(1)
-"
-
-                        # Lưu run_id để dùng ở các stage sau (build label, notify)
-                        echo "\$RUN_ID" > .mlflow_run_id
                     """
                 }
             }
         }
+
 
         // ── Stage 4: Login vào ECR ─────────────────────────────────
         stage('ECR Login') {
