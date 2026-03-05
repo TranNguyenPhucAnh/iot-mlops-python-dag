@@ -97,10 +97,14 @@ spec:
                 // Bước 2: Validate — dùng container python (có pip, wheel sẵn cho linux/amd64)
                 container('python') {
                     sh '''
-                        pip install joblib scikit-learn --quiet
+                        # dill: model.pkl được serialize bằng dill
+                        # scikit-learn==1.6.1: khớp version lúc train để tránh InconsistentVersionWarning
+                        pip install "scikit-learn==1.6.1" joblib dill --quiet
 
                         python3 -c "
-import joblib, sys
+import warnings, joblib, sys
+# Suppress version warning sau khi đã pin đúng version
+warnings.filterwarnings('ignore', category=UserWarning)
 try:
     m = joblib.load('model.pkl')
     s = joblib.load('scaler.pkl')
