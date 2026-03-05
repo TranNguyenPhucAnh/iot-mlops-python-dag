@@ -139,8 +139,9 @@ except Exception as e:
                             aws ecr get-login-password --region ap-southeast-1 \
                                 | docker login --username AWS --password-stdin 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680
 
-                            echo "🐳 Building Docker image..."
+                            echo "🐳 Building Docker image linux/amd64..."
                             docker build \
+                                --platform linux/amd64 \
                                 --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
                                 --build-arg GIT_COMMIT=$GIT_COMMIT \
                                 -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG \
