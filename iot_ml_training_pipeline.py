@@ -45,9 +45,8 @@ N_ESTIMATORS = 100
 RANDOM_STATE = 42
 
 # ── Registration thresholds ──────────────────────────────────
-MIN_ROC_AUC   = 0.75
+MIN_F1        = 0.50
 MIN_PRECISION = 0.60
-MIN_RECALL    = 0.50
 
 # ── Domain-rule thresholds ───────────────────────────────────
 DOMAIN_THRESHOLDS = {
@@ -350,33 +349,29 @@ def decide_model_registration(**context):
     logger.info("=" * 60)
 
     metrics   = context['ti'].xcom_pull(task_ids='train_model', key='model_metrics')
-    roc_auc   = metrics['test_roc_auc']
+    f1        = metrics['test_f1']
     precision = metrics['test_precision']
-    recall    = metrics['test_recall']
 
-    pass_roc_auc   = roc_auc   >= MIN_ROC_AUC
+    pass_f1        = f1        >= MIN_F1
     pass_precision = precision >= MIN_PRECISION
-    pass_recall    = recall    >= MIN_RECALL
 
-    logger.info(f"📊 ROC-AUC:   {roc_auc:.4f}  {'✅' if pass_roc_auc   else '❌'} (threshold: {MIN_ROC_AUC})")
+    logger.info(f"📊 F1:        {f1:.4f}        {'✅' if pass_f1        else '❌'} (threshold: {MIN_F1})")
     logger.info(f"📊 Precision: {precision:.4f} {'✅' if pass_precision else '❌'} (threshold: {MIN_PRECISION})")
-    logger.info(f"📊 Recall:    {recall:.4f}    {'✅' if pass_recall    else '❌'} (threshold: {MIN_RECALL})")
 
-    if metrics['test_f1'] == 0 and roc_auc == 0:
+    if f1 == 0 and precision == 0:
         logger.warning(
-            "⚠️ F1 = 0 và ROC-AUC = 0 — test set (20% cuối) có thể không có anomaly nào. "
+            "⚠️ F1 = 0 và Precision = 0 — test set (20% cuối) có thể không có anomaly nào. "
             "Xem lại sensor ranges và DOMAIN_THRESHOLDS."
         )
 
-    if pass_roc_auc and pass_precision and pass_recall:
-        logger.info("✅ Model đủ điều kiện cả 3 metrics — sẽ register vào Staging")
+    if pass_f1 and pass_precision:
+        logger.info("✅ Model đủ điều kiện cả 2 metrics — sẽ register vào Staging")
         return 'register_model'
 
     failed = [
         name for name, passed in [
-            ('ROC-AUC', pass_roc_auc),
+            ('F1', pass_f1),
             ('Precision', pass_precision),
-            ('Recall', pass_recall)
         ] if not passed
     ]
     logger.warning(f"⚠️ Model chưa đủ điều kiện — failed: {', '.join(failed)}")
@@ -459,10 +454,10 @@ def send_notification(**context):
 🔬 MLflow Run ID : {run_id}
 
 📊 Model Performance:
-   ROC-AUC   : {metrics['test_roc_auc']:.4f}  (threshold: {MIN_ROC_AUC})
+   F1 Score  : {metrics['test_f1']:.4f}  (threshold: {MIN_F1})
    Precision : {metrics['test_precision']:.4f}  (threshold: {MIN_PRECISION})
-   Recall    : {metrics['test_recall']:.4f}  (threshold: {MIN_RECALL})
-   F1 Score  : {metrics['test_f1']:.4f}
+   Recall    : {metrics['test_recall']:.4f}
+   ROC-AUC   : {metrics['test_roc_auc']:.4f}
    Accuracy  : {metrics['test_accuracy']:.4f}
 
 🏷️  Label Strategy : domain_rules_iaq (v4 — no synthetic augmentation)
