@@ -74,20 +74,19 @@ spec:
         }
 
         // ── Stage 3: Pull model artifacts từ S3 ───────────────────
-        // IRSA (jenkins-sa) có quyền S3 — không cần credentials binding
         stage('Pull Model Artifacts') {
             steps {
                 container('docker') {
-                    sh """
+                    sh '''
                         apk add --no-cache aws-cli python3 py3-pip
                         pip install joblib scikit-learn --quiet --only-binary=:all:
 
                         echo "📦 Pulling model artifacts từ S3..."
-                        aws s3 cp s3://${S3_BUCKET}/models/latest/model.pkl  ./model.pkl  --region ${AWS_REGION}
-                        aws s3 cp s3://${S3_BUCKET}/models/latest/scaler.pkl ./scaler.pkl --region ${AWS_REGION}
+                        aws s3 cp s3://iot-bme680-data-lake-prod/models/latest/model.pkl  ./model.pkl  --region ap-southeast-1
+                        aws s3 cp s3://iot-bme680-data-lake-prod/models/latest/scaler.pkl ./scaler.pkl --region ap-southeast-1
 
-                        echo "✅ model.pkl  : \$(du -sh model.pkl  | cut -f1)"
-                        echo "✅ scaler.pkl : \$(du -sh scaler.pkl | cut -f1)"
+                        echo "✅ model.pkl  : $(du -sh model.pkl  | cut -f1)"
+                        echo "✅ scaler.pkl : $(du -sh scaler.pkl | cut -f1)"
 
                         python3 -c "
 import joblib, sys
@@ -96,58 +95,57 @@ try:
     s = joblib.load('scaler.pkl')
     assert hasattr(m, 'predict'),   'model.pkl không có method predict'
     assert hasattr(s, 'transform'), 'scaler.pkl không có method transform'
-    print(f'✅ Artifacts validated | model={type(m).__name__} | scaler={type(s).__name__}')
+    print(f'Artifacts validated | model={type(m).__name__} | scaler={type(s).__name__}')
 except Exception as e:
-    print(f'❌ Artifact validation failed: {e}')
+    print(f'Artifact validation failed: {e}')
     sys.exit(1)
 "
-                        # Copy vào lambda/ để nằm trong Docker build context
                         cp model.pkl  lambda/model.pkl
                         cp scaler.pkl lambda/scaler.pkl
-                        echo "✅ Copied artifacts → lambda/"
-                    """
+                        echo "✅ Copied artifacts vào lambda/"
+                    '''
                 }
             }
         }
 
         // ── Stage 4: Build & Push Docker image ────────────────────
+        // Dùng script{} để define imageTag trong Groovy,
+        // sau đó truyền xuống shell qua biến env
         stage('Build & Push') {
             steps {
                 container('docker') {
                     script {
-                        def imageTag = "commit-${env.GIT_COMMIT.take(7)}"
+                        // Groovy: định nghĩa tag từ git commit
+                        env.IMAGE_TAG = "commit-${env.GIT_COMMIT.take(7)}"
 
-                        sh """
+                        // Single-quote string → shell xử lý hoàn toàn, không có Groovy interpolation
+                        // Dùng env.IMAGE_TAG (đã set ở trên) để truyền vào shell qua environment block
+                        sh '''
                             apk add --no-cache aws-cli
 
                             echo "🔐 Logging in to ECR..."
-                            aws ecr get-login-password --region ${AWS_REGION} \
-                                | docker login --username AWS --password-stdin ${ECR_URI}
-                                
-                            echo "Setup multi-platform build..."
+                            aws ecr get-login-password --region ap-southeast-1 \
+                                | docker login --username AWS --password-stdin 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680
+
+                            echo "⚙️  Setup multi-platform buildx..."
                             docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
                             docker buildx create --name arm64builder --driver docker-container --use || true
                             docker buildx inspect --bootstrap
 
-                            MLFLOW_RUN_ID=$(cat .mlflow_run_id)
                             echo "🐳 Building Docker image for linux/arm64..."
-                            docker buildx build \\
-                                --platform linux/arm64 \\
-                                --load \\
-                                --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
-                                --build-arg GIT_COMMIT=${GIT_COMMIT} \\
-                                --label mlflow.run_id=${MLFLOW_RUN_ID} \\
-                                -t ${ECR_URI}:${IMAGE_TAG}-arm64 \\
-                                -t ${ECR_URI}:build-${BUILD_NUMBER}-arm64 \\
+                            docker buildx build \
+                                --platform linux/arm64 \
+                                --load \
+                                --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                                --build-arg GIT_COMMIT=$GIT_COMMIT \
+                                -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG \
+                                -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:latest \
                                 lambda/
-                                 
-                            echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}-arm64"
-                            echo "   MLflow run_id : ${MLFLOW_RUN_ID}"
 
                             echo "🧪 Smoke test..."
                             docker run --rm \
                                 --entrypoint python \
-                                ${ECR_URI}:${imageTag} \
+                                408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG \
                                 -c "
 import joblib, sys
 model  = joblib.load('/var/task/model.pkl')
@@ -155,18 +153,15 @@ scaler = joblib.load('/var/task/scaler.pkl')
 import numpy as np
 sample = scaler.transform([[25.0, 60.0, 1013.0, 50000.0]])
 pred   = model.predict(sample)
-assert pred[0] in [-1, 1], 'predict() phải trả về -1 hoặc 1'
-print(f'✅ Smoke test passed | pred={pred[0]}')
+assert pred[0] in [-1, 1], 'predict() must return -1 or 1'
+print(f'Smoke test passed | pred={pred[0]}')
 "
 
                             echo "🚀 Pushing to ECR..."
-                            docker push ${ECR_URI}:${imageTag}
-                            docker push ${ECR_URI}:latest
-                            echo "✅ Pushed: ${ECR_URI}:${imageTag}"
-                        """
-
-                        // Lưu imageTag để stage deploy dùng
-                        env.IMAGE_TAG = imageTag
+                            docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG
+                            docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:latest
+                            echo "✅ Pushed: $IMAGE_TAG"
+                        '''
                     }
                 }
             }
@@ -176,22 +171,22 @@ print(f'✅ Smoke test passed | pred={pred[0]}')
         stage('Deploy to Lambda') {
             steps {
                 container('docker') {
-                    sh """
+                    sh '''
                         apk add --no-cache aws-cli
 
-                        echo "⚡ Updating Lambda: ${LAMBDA_FUNCTION_NAME}..."
+                        echo "⚡ Updating Lambda: aqi-prediction-lambda..."
                         aws lambda update-function-code \
-                            --function-name ${LAMBDA_FUNCTION_NAME} \
-                            --image-uri     ${ECR_URI}:${env.IMAGE_TAG} \
-                            --region        ${AWS_REGION}
+                            --function-name aqi-prediction-lambda \
+                            --image-uri     408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG \
+                            --region        ap-southeast-1
 
                         echo "⏳ Waiting for update to complete..."
                         aws lambda wait function-updated \
-                            --function-name ${LAMBDA_FUNCTION_NAME} \
-                            --region        ${AWS_REGION}
+                            --function-name aqi-prediction-lambda \
+                            --region        ap-southeast-1
 
-                        echo "✅ Lambda updated → ${ECR_URI}:${env.IMAGE_TAG}"
-                    """
+                        echo "✅ Lambda updated"
+                    '''
                 }
             }
         }
@@ -200,14 +195,14 @@ print(f'✅ Smoke test passed | pred={pred[0]}')
         stage('Verify Lambda') {
             steps {
                 container('docker') {
-                    sh """
+                    sh '''
                         apk add --no-cache aws-cli python3
 
                         echo "🔍 Verifying Lambda deployment..."
                         aws lambda invoke \
-                            --function-name ${LAMBDA_FUNCTION_NAME} \
-                            --region        ${AWS_REGION} \
-                            --payload       '{"body": "{\\"T\\": 25.0, \\"H\\": 60.0, \\"P\\": 1013.0, \\"G\\": 50000.0}"}' \
+                            --function-name aqi-prediction-lambda \
+                            --region        ap-southeast-1 \
+                            --payload       '{"body": "{\"T\": 25.0, \"H\": 60.0, \"P\": 1013.0, \"G\": 50000.0}"}' \
                             --cli-binary-format raw-in-base64-out \
                             /tmp/lambda_response.json
 
@@ -220,12 +215,12 @@ with open('/tmp/lambda_response.json') as f:
     resp = json.load(f)
 status = resp.get('statusCode', 500)
 if status != 200:
-    print(f'❌ statusCode={status}')
+    print(f'statusCode={status}')
     sys.exit(1)
 body = json.loads(resp.get('body', '{}'))
-print(f'✅ Verify passed | is_anomaly={body.get(\"is_anomaly\")} | score={body.get(\"decision_score\")}')
+print(f'Verify passed | is_anomaly={body.get(\"is_anomaly\")} | score={body.get(\"decision_score\")}')
 "
-                    """
+                    '''
                 }
             }
         }
@@ -233,15 +228,7 @@ print(f'✅ Verify passed | is_anomaly={body.get(\"is_anomaly\")} | score={body.
 
     post {
         success {
-            echo """
-╔══════════════════════════════════════════════╗
-║  ✅  DEPLOYMENT SUCCESSFUL                   ║
-╠══════════════════════════════════════════════╣
-║  Image  : ${ECR_URI}:${env.IMAGE_TAG}
-║  Lambda : ${LAMBDA_FUNCTION_NAME}
-║  Build  : #${BUILD_NUMBER}
-╚══════════════════════════════════════════════╝
-"""
+            echo "✅ DEPLOYMENT SUCCESSFUL | Image: ${env.IMAGE_TAG} | Lambda: aqi-prediction-lambda | Build: #${BUILD_NUMBER}"
         }
         failure {
             echo "❌ Pipeline failed — xem logs bên trên để debug"
