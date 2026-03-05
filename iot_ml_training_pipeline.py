@@ -30,6 +30,7 @@ from sklearn.metrics import (
     precision_score, recall_score, f1_score,
     confusion_matrix
 )
+from sklearn.metrics import confusion_matrix
 import joblib
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,16 @@ def train_anomaly_model(**context):
         test_scores_continuous = -model.score_samples(X_test_scaled)
         y_test_pred            = (model.predict(X_test_scaled) == -1).astype(int)
         y_train_pred           = (model.predict(X_train_scaled) == -1).astype(int)
+        # Sau dòng y_test_pred = ...
+        logger.info(f"📊 Predicted anomaly rate (train): {y_train_pred.mean():.2%} ({y_train_pred.sum()}/{len(y_train_pred)})")
+        logger.info(f"📊 Predicted anomaly rate (test):  {y_test_pred.mean():.2%} ({y_test_pred.sum()}/{len(y_test_pred)})")
+        logger.info(f"📊 Actual anomaly rate (test):     {y_test.mean():.2%} ({y_test.sum()}/{len(y_test)})")
+        
+        # Confusion matrix chi tiết
+        tn, fp, fn, tp = confusion_matrix(y_test, y_test_pred, labels=[0,1]).ravel()
+        logger.info(f"📊 Confusion matrix — TP={tp}, FP={fp}, TN={tn}, FN={fn}")
+        logger.info(f"   Precision = TP/(TP+FP) = {tp}/{tp+fp} = {tp/(tp+fp) if (tp+fp)>0 else 0:.4f}")
+        logger.info(f"   Recall    = TP/(TP+FN) = {tp}/{tp+fn} = {tp/(tp+fn) if (tp+fn)>0 else 0:.4f}")
 
         # ── Metrics ───────────────────────────────────────────────
         if len(np.unique(y_test)) == 2:
