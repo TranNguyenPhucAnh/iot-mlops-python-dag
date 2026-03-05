@@ -53,7 +53,7 @@ pipeline {
             }
         }
 
-        // ── Stage 3: Query MLflow API → lấy cả 2 artifact URI → pull từ S3 ──
+        // ── Stage 3: Pull model artifacts từ S3 ─────────────────
         stage('Pull Model Artifacts') {
             steps {
                 withCredentials([[
@@ -63,93 +63,30 @@ pipeline {
                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
                 ]]) {
                     sh """
-                        echo "🔍 Querying MLflow API for latest model artifacts..."
-
-                        python3 - <<'PYEOF'
-import urllib.request, json, sys, subprocess
-
-MLFLOW_URI = "http://mlflow.mlflow.svc.cluster.local:80"
-MODEL_NAME = "bme680-anomaly-detector"
-AWS_REGION = "ap-southeast-1"
-
-def api(path):
-    with urllib.request.urlopen(f"{MLFLOW_URI}/api/2.0/mlflow/{path}", timeout=10) as r:
-        return json.loads(r.read())
-
-# ── Bước 1: Lấy model version mới nhất (Production → fallback Staging) ───────
-version_info = None
-for stage in ["Production", "Staging"]:
-    data = api(f"registered-models/get-latest-versions?name={MODEL_NAME}&stages={stage}")
-    versions = data.get("model_versions", [])
-    if versions:
-        version_info = versions[0]
-        print(f"[INFO] Found {stage} version={version_info['version']} run_id={version_info['run_id']}", file=sys.stderr)
-        break
-
-if not version_info:
-    print("[ERROR] Không tìm thấy model ở Production hoặc Staging", file=sys.stderr)
-    sys.exit(1)
-
-run_id        = version_info["run_id"]
-# source uri của model version — đây chính là path chứa model.pkl
-# vd: s3://bucket/mlflow-artifacts/1/models/m-<hash>/artifacts/model
-model_uri     = version_info["source"]
-
-# ── Bước 2: Lấy artifact_uri của run — đây là root chứa scaler.pkl ───────────
-run_data      = api(f"runs/get?run_id={run_id}")
-artifact_uri  = run_data["run"]["info"]["artifact_uri"]
-# vd: s3://bucket/mlflow-artifacts/1/{run_id}/artifacts
-
-# ── Bước 3: Ghép S3 path chính xác ───────────────────────────────────────────
-# model.pkl nằm trong source của model version (có dạng m-<hash>)
-model_s3  = f"{model_uri}/model.pkl"
-
-# scaler.pkl nằm trong artifact_uri của run (run_id folder)
-scaler_s3 = f"{artifact_uri}/preprocessor/scaler.pkl"
-
-print(f"[INFO] model_s3  = {model_s3}",  file=sys.stderr)
-print(f"[INFO] scaler_s3 = {scaler_s3}", file=sys.stderr)
-
-# ── Bước 4: Pull về workspace ─────────────────────────────────────────────────
-for s3_path, local in [(model_s3, "model.pkl"), (scaler_s3, "scaler.pkl")]:
-    print(f"[INFO] Downloading {s3_path} → {local}", file=sys.stderr)
-    result = subprocess.run(
-        ["aws", "s3", "cp", s3_path, local, "--region", AWS_REGION],
-        capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print(f"[ERROR] aws s3 cp failed: {result.stderr}", file=sys.stderr)
-        sys.exit(1)
-    print(f"[INFO] ✅ Downloaded {local}", file=sys.stderr)
-
-# ── Bước 5: Validate ──────────────────────────────────────────────────────────
-import joblib
-try:
-    m = joblib.load("model.pkl")
-    s = joblib.load("scaler.pkl")
-    assert hasattr(m, "predict"),   "model.pkl không có method predict"
-    assert hasattr(s, "transform"), "scaler.pkl không có method transform"
-    print(f"[INFO] ✅ Artifacts validated | model={type(m).__name__} scaler={type(s).__name__}", file=sys.stderr)
-except Exception as e:
-    print(f"[ERROR] Artifact validation failed: {e}", file=sys.stderr)
-    sys.exit(1)
-
-# Lưu run_id ra file để các stage sau dùng
-with open(".mlflow_run_id", "w") as f:
-    f.write(run_id)
-
-print(f"[INFO] run_id saved → .mlflow_run_id", file=sys.stderr)
-PYEOF
-
+                        echo "📦 Pulling model artifacts từ S3..."
+                        aws s3 cp s3://iot-bme680-data-lake-prod/models/latest/model.pkl  ./model.pkl  --region ${AWS_REGION}
+                        aws s3 cp s3://iot-bme680-data-lake-prod/models/latest/scaler.pkl ./scaler.pkl --region ${AWS_REGION}
                         echo "✅ model.pkl  : \$(du -sh model.pkl  | cut -f1)"
                         echo "✅ scaler.pkl : \$(du -sh scaler.pkl | cut -f1)"
+
+                        python3 -c "
+import joblib, sys
+try:
+    m = joblib.load('model.pkl')
+    s = joblib.load('scaler.pkl')
+    assert hasattr(m, 'predict'),   'model.pkl không có method predict'
+    assert hasattr(s, 'transform'), 'scaler.pkl không có method transform'
+    print(f'✅ Artifacts validated | model={type(m).__name__} | scaler={type(s).__name__}')
+except Exception as e:
+    print(f'❌ Artifact validation failed: {e}')
+    sys.exit(1)
+"
                     """
                 }
             }
         }
 
-
-        // ── Stage 4: Login vào ECR ─────────────────────────────────
+                // ── Stage 4: Login vào ECR ─────────────────────────────────
         stage('ECR Login') {
             steps {
                 withCredentials([[
@@ -168,29 +105,22 @@ PYEOF
             }
         }
 
-        // ── Stage 5: Build Docker image (ARM64) ────────────────────────────
+        // ── Stage 5: Build Docker image ────────────────────────────
         stage('Docker Build') {
             steps {
-                sh '''
-                    # Setup multi-platform build (chỉ chạy lần đầu hoặc khi cần)
-                    docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
-                    docker buildx create --name arm64builder --driver docker-container --use || true
-                    docker buildx inspect --bootstrap
-        
-                    MLFLOW_RUN_ID=$(cat .mlflow_run_id)
-                    echo "🐳 Building Docker image for linux/arm64..."
-                    docker buildx build \\
-                        --platform linux/arm64 \\
-                        --load \\
-                        --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
+                sh """
+                    MLFLOW_RUN_ID=\$(cat .mlflow_run_id)
+                    echo "🐳 Building Docker image..."
+                    docker build \\
+                        --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
                         --build-arg GIT_COMMIT=${GIT_COMMIT} \\
-                        --label mlflow.run_id=${MLFLOW_RUN_ID} \\
-                        -t ${ECR_URI}:${IMAGE_TAG}-arm64 \\
-                        -t ${ECR_URI}:build-${BUILD_NUMBER}-arm64 \\
+                        --label     mlflow.run_id=\${MLFLOW_RUN_ID} \\
+                        -t ${ECR_URI}:${IMAGE_TAG} \\
+                        -t ${ECR_URI}:build-${BUILD_NUMBER} \\
                         .
-                    echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}-arm64"
-                    echo "   MLflow run_id : ${MLFLOW_RUN_ID}"
-                '''
+                    echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}"
+                    echo "   MLflow run_id : \${MLFLOW_RUN_ID}"
+                """
             }
         }
 
