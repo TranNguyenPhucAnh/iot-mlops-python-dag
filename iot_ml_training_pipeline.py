@@ -45,18 +45,21 @@ N_ESTIMATORS = 100
 RANDOM_STATE = 42
 
 # ── Registration thresholds ──────────────────────────────────
-MIN_F1        = 0.50
+MIN_ROC_AUC   = 0.75
 MIN_PRECISION = 0.60
+MIN_RECALL    = 0.50
 
 # ── Domain-rule thresholds ───────────────────────────────────
 DOMAIN_THRESHOLDS = {
-    'iaq_score_max':    150.0,   # WHO: >150 Unhealthy (dùng iaq_score từ Silver, không tính lại)
-    'temperature_max':   35.0,   # Trong nhà bất thường
-    'temperature_min':   10.0,   # Quá lạnh
-    'humidity_max':      80.0,   # Nguy cơ mốc
-    'humidity_min':      20.0,   # Quá khô
-    # gas_resistance KHÔNG đặt ở đây vì iaq_score đã encode gas + humidity rồi
-    # → tránh double counting và tránh vấn đề baseline drift giữa các DAG
+    # Người mũi nhạy: iaq > p90 của baseline là cảm nhận được
+    'iaq_score_max':    75.0,   # p98=84.5, p90 ~70-75
+
+    # Nhiệt độ & độ ẩm — data thực tế: temp 28-31, humidity 61-75
+    # Người nhạy cảm sẽ thấy khó chịu khi lệch nhẹ khỏi comfortable zone
+    'temperature_max':  31.0,   # max thực tế 31.6 — trên này là nóng hơn bình thường
+    'temperature_min':  27.0,   # dưới này là lạnh hơn bình thường (điều hòa mạnh)
+    'humidity_max':     74.0,   # p98=74.2 — trên này là ẩm hơn bình thường
+    'humidity_min':     62.0,   # p02=62.3 — dưới này là khô hơn bình thường
 }
 
 FEATURE_COLS = [
@@ -276,13 +279,11 @@ def train_anomaly_model(**context):
         logger.info("\n=== Model Performance ===")
         logger.info(f"  {'Metric':<20} {'Train':>12} {'Test':>12}  {'Threshold':>10}")
         logger.info(f"  {'-'*58}")
-        logger.info(f"  {'ROC-AUC':<20} {'N/A':>12} {roc_auc:>12.4f}")
+        logger.info(f"  {'ROC-AUC':<20} {'N/A':>12} {roc_auc:>12.4f}  {MIN_ROC_AUC:>10}")
         logger.info(f"  {'Precision':<20} {train_metrics['train_precision']:>12.4f} "
                     f"{test_metrics['test_precision']:>12.4f}  {MIN_PRECISION:>10}")
         logger.info(f"  {'Recall':<20} {train_metrics['train_recall']:>12.4f} "
-                    f"{test_metrics['test_recall']:>12.4f}")
-        logger.info(f"  {'F1':<20} {train_metrics['train_f1']:>12.4f} "
-                    f"{test_metrics['test_f1']:>12.4f}  {MIN_F1:>10}")
+                    f"{test_metrics['test_recall']:>12.4f}  {MIN_RECALL:>10}")
         logger.info(f"  {'F1':<20} {train_metrics['train_f1']:>12.4f} "
                     f"{test_metrics['test_f1']:>12.4f}")
         logger.info(f"  {'Accuracy':<20} {train_metrics['train_accuracy']:>12.4f} "
@@ -349,29 +350,33 @@ def decide_model_registration(**context):
     logger.info("=" * 60)
 
     metrics   = context['ti'].xcom_pull(task_ids='train_model', key='model_metrics')
-    f1        = metrics['test_f1']
+    roc_auc   = metrics['test_roc_auc']
     precision = metrics['test_precision']
+    recall    = metrics['test_recall']
 
-    pass_f1        = f1        >= MIN_F1
+    pass_roc_auc   = roc_auc   >= MIN_ROC_AUC
     pass_precision = precision >= MIN_PRECISION
+    pass_recall    = recall    >= MIN_RECALL
 
-    logger.info(f"📊 F1:        {f1:.4f}        {'✅' if pass_f1        else '❌'} (threshold: {MIN_F1})")
+    logger.info(f"📊 ROC-AUC:   {roc_auc:.4f}  {'✅' if pass_roc_auc   else '❌'} (threshold: {MIN_ROC_AUC})")
     logger.info(f"📊 Precision: {precision:.4f} {'✅' if pass_precision else '❌'} (threshold: {MIN_PRECISION})")
+    logger.info(f"📊 Recall:    {recall:.4f}    {'✅' if pass_recall    else '❌'} (threshold: {MIN_RECALL})")
 
-    if f1 == 0 and precision == 0:
+    if metrics['test_f1'] == 0 and roc_auc == 0:
         logger.warning(
-            "⚠️ F1 = 0 và Precision = 0 — test set (20% cuối) có thể không có anomaly nào. "
+            "⚠️ F1 = 0 và ROC-AUC = 0 — test set (20% cuối) có thể không có anomaly nào. "
             "Xem lại sensor ranges và DOMAIN_THRESHOLDS."
         )
 
-    if pass_f1 and pass_precision:
-        logger.info("✅ Model đủ điều kiện cả 2 metrics — sẽ register vào Staging")
+    if pass_roc_auc and pass_precision and pass_recall:
+        logger.info("✅ Model đủ điều kiện cả 3 metrics — sẽ register vào Staging")
         return 'register_model'
 
     failed = [
         name for name, passed in [
-            ('F1', pass_f1),
+            ('ROC-AUC', pass_roc_auc),
             ('Precision', pass_precision),
+            ('Recall', pass_recall)
         ] if not passed
     ]
     logger.warning(f"⚠️ Model chưa đủ điều kiện — failed: {', '.join(failed)}")
@@ -454,10 +459,10 @@ def send_notification(**context):
 🔬 MLflow Run ID : {run_id}
 
 📊 Model Performance:
-   F1 Score  : {metrics['test_f1']:.4f}  (threshold: {MIN_F1})
+   ROC-AUC   : {metrics['test_roc_auc']:.4f}  (threshold: {MIN_ROC_AUC})
    Precision : {metrics['test_precision']:.4f}  (threshold: {MIN_PRECISION})
-   Recall    : {metrics['test_recall']:.4f}
-   ROC-AUC   : {metrics['test_roc_auc']:.4f}
+   Recall    : {metrics['test_recall']:.4f}  (threshold: {MIN_RECALL})
+   F1 Score  : {metrics['test_f1']:.4f}
    Accuracy  : {metrics['test_accuracy']:.4f}
 
 🏷️  Label Strategy : domain_rules_iaq (v4 — no synthetic augmentation)
