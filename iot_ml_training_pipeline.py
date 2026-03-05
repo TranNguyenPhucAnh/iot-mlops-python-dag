@@ -51,11 +51,15 @@ MIN_RECALL    = 0.50
 
 # ── Domain-rule thresholds ───────────────────────────────────
 DOMAIN_THRESHOLDS = {
-    'iaq_score_max':    150.0,
-    'temperature_max':   35.0,
-    'temperature_min':   10.0,
-    'humidity_max':      80.0,
-    'humidity_min':      20.0,
+    # Người mũi nhạy: iaq > p90 của baseline là cảm nhận được
+    'iaq_score_max':    75.0,   # p98=84.5, p90 ~70-75
+
+    # Nhiệt độ & độ ẩm — data thực tế: temp 28-31, humidity 61-75
+    # Người nhạy cảm sẽ thấy khó chịu khi lệch nhẹ khỏi comfortable zone
+    'temperature_max':  31.0,   # max thực tế 31.6 — trên này là nóng hơn bình thường
+    'temperature_min':  27.0,   # dưới này là lạnh hơn bình thường (điều hòa mạnh)
+    'humidity_max':     74.0,   # p98=74.2 — trên này là ẩm hơn bình thường
+    'humidity_min':     62.0,   # p02=62.3 — dưới này là khô hơn bình thường
 }
 
 FEATURE_COLS = [
@@ -204,8 +208,8 @@ def train_anomaly_model(**context):
 
     # ── Contamination từ real anomaly_rate ───────────────────────
     # Không còn synthetic — contamination chính là tỷ lệ anomaly thực tế
-    # Cap 0.15 để tránh IsolationForest overfit với contamination quá cao
-    contamination = float(np.clip(anomaly_rate, 0.01, 0.15))
+    contamination = float(np.clip(anomaly_rate, 0.01, 0.50))
+    # Nới cap lên 0.50 vì với threshold nhạy, anomaly_rate có thể 10-20%
     logger.info(f"📊 Anomaly rate: {anomaly_rate:.2%} → contamination={contamination:.4f}")
 
     with mlflow.start_run(run_name=f"anomaly_detection_{context['ds_nodash']}") as run:
