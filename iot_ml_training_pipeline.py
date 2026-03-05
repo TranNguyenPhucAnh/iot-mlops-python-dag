@@ -25,12 +25,12 @@ import logging
 from io import BytesIO
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     roc_auc_score, accuracy_score,
     precision_score, recall_score, f1_score,
     confusion_matrix
 )
-from sklearn.metrics import confusion_matrix
 import joblib
 
 logger = logging.getLogger(__name__)
@@ -52,13 +52,15 @@ MIN_RECALL    = 0.50
 
 # ── Domain-rule thresholds ───────────────────────────────────
 DOMAIN_THRESHOLDS = {
-    'iaq_score_max':    150.0,   # WHO: >150 Unhealthy (dùng iaq_score từ Silver, không tính lại)
-    'temperature_max':   35.0,   # Trong nhà bất thường
-    'temperature_min':   20.0,   # Quá lạnh
-    'humidity_max':      80.0,   # Nguy cơ mốc
-    'humidity_min':      20.0,   # Quá khô
-    # gas_resistance KHÔNG đặt ở đây vì iaq_score đã encode gas + humidity rồi
-    # → tránh double counting và tránh vấn đề baseline drift giữa các DAG
+    # Người mũi nhạy: iaq > p90 của baseline là cảm nhận được
+    'iaq_score_max':    75.0,   # p98=84.5, p90 ~70-75
+
+    # Nhiệt độ & độ ẩm — data thực tế: temp 28-31, humidity 61-75
+    # Người nhạy cảm sẽ thấy khó chịu khi lệch nhẹ khỏi comfortable zone
+    'temperature_max':  31.0,   # max thực tế 31.6 — trên này là nóng hơn bình thường
+    'temperature_min':  27.0,   # dưới này là lạnh hơn bình thường (điều hòa mạnh)
+    'humidity_max':     74.0,   # p98=74.2 — trên này là ẩm hơn bình thường
+    'humidity_min':     62.0,   # p02=62.3 — dưới này là khô hơn bình thường
 }
 
 FEATURE_COLS = [
@@ -194,10 +196,14 @@ def train_anomaly_model(**context):
     y            = np.array(df['is_anomaly'])
     anomaly_rate = thresholds['anomaly_rate']
 
-    # ── Split theo thời gian ──────────────────────────────────────
-    split_idx       = int(len(X) * 0.8)
-    X_train, X_test = X.iloc[:split_idx],  X.iloc[split_idx:]
-    y_train, y_test = y[:split_idx],        y[split_idx:]
+    # ── Stratified split — đảm bảo anomaly phân bổ đều train/test ─
+    # Time-based split bị lỗi khi anomaly tập trung ở một khoảng thời gian
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=0.2,
+        random_state=RANDOM_STATE,
+        stratify=y,
+    )
 
     logger.info(f"📊 Train: {X_train.shape} | anomaly: {y_train.sum()} ({y_train.mean():.2%})")
     logger.info(f"📊 Test : {X_test.shape}  | anomaly: {y_test.sum()} ({y_test.mean():.2%})")
@@ -225,7 +231,7 @@ def train_anomaly_model(**context):
             'n_features':          len(FEATURE_COLS),
             'anomaly_rate':        anomaly_rate,
             'augmentation':        'none',
-            'split_method':        'time_based_80_20',
+            'split_method':        'stratified_random_80_20',
             'label_strategy':      'domain_rules_iaq',
             'training_date':       context['ds'],
             'data_source':         f's3://{S3_BUCKET}/{S3_SILVER_PREFIX}',
@@ -252,16 +258,6 @@ def train_anomaly_model(**context):
         test_scores_continuous = -model.score_samples(X_test_scaled)
         y_test_pred            = (model.predict(X_test_scaled) == -1).astype(int)
         y_train_pred           = (model.predict(X_train_scaled) == -1).astype(int)
-        # Sau dòng y_test_pred = ...
-        logger.info(f"📊 Predicted anomaly rate (train): {y_train_pred.mean():.2%} ({y_train_pred.sum()}/{len(y_train_pred)})")
-        logger.info(f"📊 Predicted anomaly rate (test):  {y_test_pred.mean():.2%} ({y_test_pred.sum()}/{len(y_test_pred)})")
-        logger.info(f"📊 Actual anomaly rate (test):     {y_test.mean():.2%} ({y_test.sum()}/{len(y_test)})")
-        
-        # Confusion matrix chi tiết
-        tn, fp, fn, tp = confusion_matrix(y_test, y_test_pred, labels=[0,1]).ravel()
-        logger.info(f"📊 Confusion matrix — TP={tp}, FP={fp}, TN={tn}, FN={fn}")
-        logger.info(f"   Precision = TP/(TP+FP) = {tp}/{tp+fp} = {tp/(tp+fp) if (tp+fp)>0 else 0:.4f}")
-        logger.info(f"   Recall    = TP/(TP+FN) = {tp}/{tp+fn} = {tp/(tp+fn) if (tp+fn)>0 else 0:.4f}")
 
         # ── Metrics ───────────────────────────────────────────────
         if len(np.unique(y_test)) == 2:
