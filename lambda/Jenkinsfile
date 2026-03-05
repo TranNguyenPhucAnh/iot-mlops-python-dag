@@ -37,7 +37,7 @@ spec:
     environment {
         AWS_REGION           = "ap-southeast-1"
         ECR_URI              = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
-        LAMBDA_FUNCTION_NAME = "aqi-prediction-lambda"
+        LAMBDA_FUNCTION_NAME = "bme680-inference"
         S3_BUCKET            = "iot-bme680-data-lake-prod"
     }
 
@@ -80,7 +80,7 @@ spec:
                 container('docker') {
                     sh """
                         apk add --no-cache aws-cli python3 py3-pip
-                        pip install joblib scikit-learn --quiet
+                        pip install joblib scikit-learn --quiet --only-binary=:all:
 
                         echo "📦 Pulling model artifacts từ S3..."
                         aws s3 cp s3://${S3_BUCKET}/models/latest/model.pkl  ./model.pkl  --region ${AWS_REGION}
@@ -123,14 +123,26 @@ except Exception as e:
                             echo "🔐 Logging in to ECR..."
                             aws ecr get-login-password --region ${AWS_REGION} \
                                 | docker login --username AWS --password-stdin ${ECR_URI}
+                                
+                            # Setup multi-platform build (chỉ chạy lần đầu hoặc khi cần)
+                            docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
+                            docker buildx create --name arm64builder --driver docker-container --use || true
+                            docker buildx inspect --bootstrap
 
-                            echo "🐳 Building Docker image..."
-                            docker build \
-                                --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-                                --build-arg GIT_COMMIT=${env.GIT_COMMIT} \
-                                -t ${ECR_URI}:${imageTag} \
-                                -t ${ECR_URI}:latest \
+                            MLFLOW_RUN_ID=$(cat .mlflow_run_id)
+                            echo "🐳 Building Docker image for linux/arm64..."
+                            docker buildx build \\
+                                --platform linux/arm64 \\
+                                --load \\
+                                --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
+                                --build-arg GIT_COMMIT=${GIT_COMMIT} \\
+                                --label mlflow.run_id=${MLFLOW_RUN_ID} \\
+                                -t ${ECR_URI}:${IMAGE_TAG}-arm64 \\
+                                -t ${ECR_URI}:build-${BUILD_NUMBER}-arm64 \\
                                 lambda/
+                                 
+                            echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}-arm64"
+                            echo "   MLflow run_id : ${MLFLOW_RUN_ID}"
 
                             echo "🧪 Smoke test..."
                             docker run --rm \
@@ -160,32 +172,29 @@ print(f'✅ Smoke test passed | pred={pred[0]}')
             }
         }
 
-         // ── Stage 5: Build Docker image (ARM64) ────────────────────────────
-        stage('Docker Build') {
+        // ── Stage 5: Deploy to Lambda ──────────────────────────────
+        stage('Deploy to Lambda') {
             steps {
-                sh '''
-                    # Setup multi-platform build (chỉ chạy lần đầu hoặc khi cần)
-                    docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
-                    docker buildx create --name arm64builder --driver docker-container --use || true
-                    docker buildx inspect --bootstrap
-        
-                    MLFLOW_RUN_ID=$(cat .mlflow_run_id)
-                    echo "🐳 Building Docker image for linux/arm64..."
-                    docker buildx build \\
-                        --platform linux/arm64 \\
-                        --load \\
-                        --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
-                        --build-arg GIT_COMMIT=${GIT_COMMIT} \\
-                        --label mlflow.run_id=${MLFLOW_RUN_ID} \\
-                        -t ${ECR_URI}:${IMAGE_TAG}-arm64 \\
-                        -t ${ECR_URI}:build-${BUILD_NUMBER}-arm64 \\
-                        .
-                    echo "✅ Build complete: ${ECR_URI}:${IMAGE_TAG}-arm64"
-                    echo "   MLflow run_id : ${MLFLOW_RUN_ID}"
-                '''
+                container('docker') {
+                    sh """
+                        apk add --no-cache aws-cli
+
+                        echo "⚡ Updating Lambda: ${LAMBDA_FUNCTION_NAME}..."
+                        aws lambda update-function-code \
+                            --function-name ${LAMBDA_FUNCTION_NAME} \
+                            --image-uri     ${ECR_URI}:${env.IMAGE_TAG} \
+                            --region        ${AWS_REGION}
+
+                        echo "⏳ Waiting for update to complete..."
+                        aws lambda wait function-updated \
+                            --function-name ${LAMBDA_FUNCTION_NAME} \
+                            --region        ${AWS_REGION}
+
+                        echo "✅ Lambda updated → ${ECR_URI}:${env.IMAGE_TAG}"
+                    """
+                }
             }
         }
-
 
         // ── Stage 6: Verify Lambda ─────────────────────────────────
         stage('Verify Lambda') {
