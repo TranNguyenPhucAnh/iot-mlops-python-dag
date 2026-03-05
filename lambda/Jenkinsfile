@@ -202,42 +202,53 @@ print(f'Smoke test passed | pred={pred[0]}')
             steps {
                 container('docker') {
                     sh '''
-                        apk add --no-cache aws-cli python3
-
+                        apk add --no-cache aws-cli python3 py3-pip jq  # Thêm jq để pretty-print nếu cần
+                    
                         echo "🔍 Verifying Lambda deployment..."
-
-                        # Ghi payload ra file bằng python để đảm bảo JSON hợp lệ
+                    
+                        # Ghi payload (giữ nguyên)
                         python3 -c "
-import json
-payload = {'body': json.dumps({'T': 25.0, 'H': 60.0, 'P': 1013.0, 'G': 50000.0})}
-with open('/tmp/lambda_payload.json', 'w') as f:
-    json.dump(payload, f)
-print('Payload written:', json.dumps(payload))
-"
+                    import json
+                    payload = {'body': json.dumps({'T': 25.0, 'H': 60.0, 'P': 1013.0, 'G': 50000.0})}
+                    with open('/tmp/lambda_payload.json', 'w') as f:
+                        json.dump(payload, f)
+                    print('Payload written:', json.dumps(payload))
+                    "
+                    
                         echo "📋 Payload content:"
                         cat /tmp/lambda_payload.json
-
-                        aws lambda invoke \
-                            --function-name aqi-prediction-lambda \
-                            --region        ap-southeast-1 \
-                            --cli-binary-format raw-in-base64-out \
-                            --payload       file:///tmp/lambda_payload.json \
+                    
+                        aws lambda invoke \\
+                            --function-name aqi-prediction-lambda \\
+                            --region        ap-southeast-1 \\
+                            --cli-binary-format raw-in-base64-out \\
+                            --payload       file:///tmp/lambda_payload.json \\
                             /tmp/lambda_response.json
-
+                    
                         echo "📋 Lambda response:"
                         cat /tmp/lambda_response.json
-
-                        python3 -c "
-import json, sys
-with open('/tmp/lambda_response.json') as f:
-    resp = json.load(f)
-status = resp.get('statusCode', 500)
-if status != 200:
-    print(f'statusCode={status}')
-    sys.exit(1)
-body = json.loads(resp.get('body', '{}'))
-print(f'Verify passed | is_anomaly={body.get(\"is_anomaly\")} | score={body.get(\"decision_score\")}')
-"
+                    
+                        # Verify bằng heredoc file (fix lỗi)
+                        cat > /tmp/verify.py << 'EOF'
+                    import json
+                    import sys
+                    
+                    try:
+                        with open('/tmp/lambda_response.json') as f:
+                            resp = json.load(f)
+                        status = resp.get('statusCode', 500)
+                        if status != 200:
+                            print(f'❌ Verify failed | statusCode={status}', file=sys.stderr)
+                            sys.exit(1)
+                        body = json.loads(resp.get('body', '{}'))
+                        print(f'✅ Verify passed | is_anomaly={body.get("is_anomaly", "N/A")} | score={body.get("decision_score", "N/A")}')
+                    except Exception as e:
+                        print(f'❌ Verify error: {e}', file=sys.stderr)
+                        sys.exit(1)
+                    EOF
+                    
+                        python3 /tmp/verify.py
+                        rm -f /tmp/verify.py /tmp/lambda_*.json
                     '''
                 }
             }
