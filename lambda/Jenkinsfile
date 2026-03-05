@@ -1,26 +1,49 @@
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-sa
+  containers:
+  - name: jnlp
+    image: jenkins/inbound-agent:latest
+    tty: true
 
-    // ──────────────────────────────────────────────
-    // Thay các giá trị này theo môi trường của bạn
-    // ──────────────────────────────────────────────
+  - name: python
+    image: python:3.12-slim
+    command: ["/bin/sh"]
+    tty: true
+
+  - name: docker
+    image: docker:24.0.5-dind
+    securityContext:
+      privileged: true
+    tty: true
+    args:
+      - --host=unix:///var/run/docker.sock
+    volumeMounts:
+      - name: docker-graph-storage
+        mountPath: /var/lib/docker
+
+  volumes:
+  - name: docker-graph-storage
+    emptyDir: {}
+'''
+        }
+    }
+
     environment {
-        AWS_REGION          = "ap-southeast-1"                          // Region của ECR + Lambda
-        AWS_ACCOUNT_ID      = "408279620390"                            // AWS Account ID
-        ECR_REPO_NAME       = "iot-bme680"                              // Tên ECR repository
-        LAMBDA_FUNCTION_NAME = "aqi-prediction-lambda"                  // Tên Lambda function
-        IMAGE_TAG           = "latest"                                  // hoặc dùng "${BUILD_NUMBER}" để versioning
-
-        // Full ECR URI — tự động ghép từ các biến trên, không cần sửa
-        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+        AWS_REGION           = "ap-southeast-1"
+        ECR_URI              = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
+        LAMBDA_FUNCTION_NAME = "aqi-prediction-lambda"
+        S3_BUCKET            = "iot-bme680-data-lake-prod"
     }
 
     options {
-        // Giữ tối đa 10 build log, tránh tốn disk
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        // Timeout toàn bộ pipeline: 30 phút
         timeout(time: 30, unit: 'MINUTES')
-        // Không chạy concurrent build cùng lúc
         disableConcurrentBuilds()
     }
 
@@ -30,16 +53,16 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                echo "✅ Checked out branch: ${env.GIT_BRANCH}"
-                echo "   Commit: ${env.GIT_COMMIT}"
+                echo "✅ Branch : ${env.GIT_BRANCH}"
+                echo "   Commit : ${env.GIT_COMMIT}"
             }
         }
 
-        // ── Stage 2: Validate required files ──────────────────────
+        // ── Stage 2: Validate ──────────────────────────────────────
         stage('Validate') {
             steps {
                 script {
-                    def required = ['Dockerfile', 'app.py']
+                    def required = ['lambda/Dockerfile', 'lambda/app.py']
                     for (f in required) {
                         if (!fileExists(f)) {
                             error "❌ File bắt buộc không tồn tại: ${f}"
@@ -50,19 +73,19 @@ pipeline {
             }
         }
 
-        // ── Stage 3: Pull model artifacts từ S3 ─────────────────
+        // ── Stage 3: Pull model artifacts từ S3 ───────────────────
+        // IRSA (jenkins-sa) có quyền S3 — không cần credentials binding
         stage('Pull Model Artifacts') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
+                container('docker') {
                     sh """
+                        apk add --no-cache aws-cli python3 py3-pip
+                        pip install joblib scikit-learn --quiet
+
                         echo "📦 Pulling model artifacts từ S3..."
-                        aws s3 cp s3://iot-bme680-data-lake-prod/models/latest/model.pkl  ./model.pkl  --region ${AWS_REGION}
-                        aws s3 cp s3://iot-bme680-data-lake-prod/models/latest/scaler.pkl ./scaler.pkl --region ${AWS_REGION}
+                        aws s3 cp s3://${S3_BUCKET}/models/latest/model.pkl  ./model.pkl  --region ${AWS_REGION}
+                        aws s3 cp s3://${S3_BUCKET}/models/latest/scaler.pkl ./scaler.pkl --region ${AWS_REGION}
+
                         echo "✅ model.pkl  : \$(du -sh model.pkl  | cut -f1)"
                         echo "✅ scaler.pkl : \$(du -sh scaler.pkl | cut -f1)"
 
@@ -78,31 +101,66 @@ except Exception as e:
     print(f'❌ Artifact validation failed: {e}')
     sys.exit(1)
 "
+                        # Copy vào lambda/ để nằm trong Docker build context
+                        cp model.pkl  lambda/model.pkl
+                        cp scaler.pkl lambda/scaler.pkl
+                        echo "✅ Copied artifacts → lambda/"
                     """
                 }
             }
         }
 
-                // ── Stage 4: Login vào ECR ─────────────────────────────────
-        stage('ECR Login') {
+        // ── Stage 4: Build & Push Docker image ────────────────────
+        stage('Build & Push') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-                    sh """
-                        echo "🔐 Logging in to ECR..."
-                        aws ecr get-login-password --region ${AWS_REGION} \
-                            | docker login --username AWS --password-stdin ${ECR_URI}
-                        echo "✅ ECR login successful"
-                    """
+                container('docker') {
+                    script {
+                        def imageTag = "commit-${env.GIT_COMMIT.take(7)}"
+
+                        sh """
+                            apk add --no-cache aws-cli
+
+                            echo "🔐 Logging in to ECR..."
+                            aws ecr get-login-password --region ${AWS_REGION} \
+                                | docker login --username AWS --password-stdin ${ECR_URI}
+
+                            echo "🐳 Building Docker image..."
+                            docker build \
+                                --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                                --build-arg GIT_COMMIT=${env.GIT_COMMIT} \
+                                -t ${ECR_URI}:${imageTag} \
+                                -t ${ECR_URI}:latest \
+                                lambda/
+
+                            echo "🧪 Smoke test..."
+                            docker run --rm \
+                                --entrypoint python \
+                                ${ECR_URI}:${imageTag} \
+                                -c "
+import joblib, sys
+model  = joblib.load('/var/task/model.pkl')
+scaler = joblib.load('/var/task/scaler.pkl')
+import numpy as np
+sample = scaler.transform([[25.0, 60.0, 1013.0, 50000.0]])
+pred   = model.predict(sample)
+assert pred[0] in [-1, 1], 'predict() phải trả về -1 hoặc 1'
+print(f'✅ Smoke test passed | pred={pred[0]}')
+"
+
+                            echo "🚀 Pushing to ECR..."
+                            docker push ${ECR_URI}:${imageTag}
+                            docker push ${ECR_URI}:latest
+                            echo "✅ Pushed: ${ECR_URI}:${imageTag}"
+                        """
+
+                        // Lưu imageTag để stage deploy dùng
+                        env.IMAGE_TAG = imageTag
+                    }
                 }
             }
         }
 
-        // ── Stage 5: Build Docker image (ARM64) ────────────────────────────
+         // ── Stage 5: Build Docker image (ARM64) ────────────────────────────
         stage('Docker Build') {
             steps {
                 sh '''
@@ -128,96 +186,15 @@ except Exception as e:
             }
         }
 
-        // ── Stage 6: Test image trước khi push ────────────────────
-        stage('Smoke Test') {
-            steps {
-                sh """
-                    echo "🧪 Running smoke test..."
 
-                    # Chạy container test — invoke handler với payload mẫu
-                    # Lambda Runtime Interface Emulator (RIE) không bắt buộc ở đây,
-                    # chỉ kiểm tra import không bị lỗi và model load được
-                    docker run --rm \
-                        --entrypoint python \
-                        ${ECR_URI}:${IMAGE_TAG} \
-                        -c "
-import joblib, os, sys
-model  = joblib.load('model.pkl')
-scaler = joblib.load('scaler.pkl')
-import numpy as np
-sample = scaler.transform([[25.0, 60.0, 1013.0, 50000.0]])
-pred   = model.predict(sample)
-score  = model.decision_function(sample)
-assert pred[0] in [-1, 1], 'predict() phải trả về -1 hoặc 1'
-print(f'✅ Smoke test passed | pred={pred[0]} | score={score[0]:.4f}')
-sys.exit(0)
-"
-                    echo "✅ Smoke test passed"
-                """
-            }
-        }
-
-        // ── Stage 7: Push lên ECR ──────────────────────────────────
-        stage('ECR Push') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-                    sh """
-                        echo "🚀 Pushing image to ECR..."
-                        docker push ${ECR_URI}:${IMAGE_TAG}
-                        docker push ${ECR_URI}:build-${BUILD_NUMBER}
-                        echo "✅ Push complete"
-                        echo "   latest      → ${ECR_URI}:${IMAGE_TAG}"
-                        echo "   versioned   → ${ECR_URI}:build-${BUILD_NUMBER}"
-                    """
-                }
-            }
-        }
-
-        // ── Stage 8: Update Lambda function ───────────────────────
-        stage('Deploy to Lambda') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
-                    sh """
-                        echo "⚡ Updating Lambda function: ${LAMBDA_FUNCTION_NAME}..."
-                        aws lambda update-function-code \
-                            --function-name ${LAMBDA_FUNCTION_NAME} \
-                            --image-uri     ${ECR_URI}:${IMAGE_TAG} \
-                            --region        ${AWS_REGION}
-
-                        echo "⏳ Waiting for Lambda update to complete..."
-                        aws lambda wait function-updated \
-                            --function-name ${LAMBDA_FUNCTION_NAME} \
-                            --region        ${AWS_REGION}
-
-                        echo "✅ Lambda updated successfully"
-                    """
-                }
-            }
-        }
-
-        // ── Stage 9: Verify Lambda sau deploy ─────────────────────
+        // ── Stage 6: Verify Lambda ─────────────────────────────────
         stage('Verify Lambda') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]]) {
+                container('docker') {
                     sh """
-                        echo "🔍 Verifying Lambda deployment..."
+                        apk add --no-cache aws-cli python3
 
-                        # Invoke Lambda với payload test
+                        echo "🔍 Verifying Lambda deployment..."
                         aws lambda invoke \
                             --function-name ${LAMBDA_FUNCTION_NAME} \
                             --region        ${AWS_REGION} \
@@ -228,54 +205,41 @@ sys.exit(0)
                         echo "📋 Lambda response:"
                         cat /tmp/lambda_response.json
 
-                        # Kiểm tra statusCode = 200
-                        STATUS=\$(python3 -c "
-import json
+                        python3 -c "
+import json, sys
 with open('/tmp/lambda_response.json') as f:
     resp = json.load(f)
+status = resp.get('statusCode', 500)
+if status != 200:
+    print(f'❌ statusCode={status}')
+    sys.exit(1)
 body = json.loads(resp.get('body', '{}'))
-print(resp.get('statusCode', 500))
-")
-                        if [ "\$STATUS" != "200" ]; then
-                            echo "❌ Lambda verification failed — statusCode=\$STATUS"
-                            exit 1
-                        fi
-                        echo "✅ Lambda verification passed — statusCode=200"
+print(f'✅ Verify passed | is_anomaly={body.get(\"is_anomaly\")} | score={body.get(\"decision_score\")}')
+"
                     """
                 }
             }
         }
     }
 
-    // ── Post actions ───────────────────────────────────────────────
     post {
         success {
             echo """
 ╔══════════════════════════════════════════════╗
 ║  ✅  DEPLOYMENT SUCCESSFUL                   ║
 ╠══════════════════════════════════════════════╣
-║  Image   : ${ECR_URI}:${IMAGE_TAG}
-║  Lambda  : ${LAMBDA_FUNCTION_NAME}
-║  Build # : ${BUILD_NUMBER}
-║  Region  : ${AWS_REGION}
+║  Image  : ${ECR_URI}:${env.IMAGE_TAG}
+║  Lambda : ${LAMBDA_FUNCTION_NAME}
+║  Build  : #${BUILD_NUMBER}
 ╚══════════════════════════════════════════════╝
 """
         }
-
         failure {
-            echo "❌ Pipeline failed at stage — xem logs bên trên để debug"
-            // TODO: Thêm Slack/SNS notification ở đây nếu cần
-            // slackSend channel: '#iot-alerts', message: "❌ Build #${BUILD_NUMBER} failed"
+            echo "❌ Pipeline failed — xem logs bên trên để debug"
         }
-
         always {
-            // Dọn dẹp local Docker images sau mỗi build tránh tốn disk
-            sh """
-                docker rmi ${ECR_URI}:${IMAGE_TAG}       || true
-                docker rmi ${ECR_URI}:build-${BUILD_NUMBER} || true
-                docker image prune -f                    || true
-            """
-            echo "🧹 Docker cleanup complete"
+            sh "rm -f lambda/model.pkl lambda/scaler.pkl model.pkl scaler.pkl || true"
+            echo "🧹 Workspace cleanup complete"
         }
     }
 }
