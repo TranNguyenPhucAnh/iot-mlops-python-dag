@@ -37,7 +37,7 @@ spec:
     environment {
         AWS_REGION           = "ap-southeast-1"
         ECR_URI              = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
-        LAMBDA_FUNCTION_NAME = "bme680-inference"
+        LAMBDA_FUNCTION_NAME = "aqi-prediction-lambda"
         S3_BUCKET            = "iot-bme680-data-lake-prod"
     }
 
@@ -124,7 +124,7 @@ except Exception as e:
                             aws ecr get-login-password --region ${AWS_REGION} \
                                 | docker login --username AWS --password-stdin ${ECR_URI}
                                 
-                            # Setup multi-platform build (chỉ chạy lần đầu hoặc khi cần)
+                            echo "Setup multi-platform build..."
                             docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
                             docker buildx create --name arm64builder --driver docker-container --use || true
                             docker buildx inspect --bootstrap
