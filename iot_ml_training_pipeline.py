@@ -50,15 +50,18 @@ MIN_PRECISION = 0.60
 
 # ── Domain-rule thresholds ───────────────────────────────────
 DOMAIN_THRESHOLDS = {
-    # Người mũi nhạy: iaq > p90 của baseline là cảm nhận được
-    'iaq_score_max':    75.0,   # p98=84.5, p90 ~70-75
+    # temperature: min=30.2, mean=31.0, max=31.8
+    # → chỉ flag khi thực sự bất thường, trên max+1σ
+    'temperature_max':  32.0,   # trên max thực tế
+    'temperature_min':  29.5,   # dưới min thực tế
 
-    # Nhiệt độ & độ ẩm — data thực tế: temp 28-31, humidity 61-75
-    # Người nhạy cảm sẽ thấy khó chịu khi lệch nhẹ khỏi comfortable zone
-    'temperature_max':  31.0,   # max thực tế 31.6 — trên này là nóng hơn bình thường
-    'temperature_min':  27.0,   # dưới này là lạnh hơn bình thường (điều hòa mạnh)
-    'humidity_max':     74.0,   # p98=74.2 — trên này là ẩm hơn bình thường
-    'humidity_min':     62.0,   # p02=62.3 — dưới này là khô hơn bình thường
+    # humidity: min=62.9, mean=65.4, max=67.4 — rất ổn định
+    'humidity_max':     68.0,   # trên max thực tế
+    'humidity_min':     62.0,   # dưới min thực tế
+
+    # iaq_score: mean=59.3, p98=246 → p98 rất cao, có spike thực sự
+    # 945 records > 75 = 19% → vẫn nhiều, nới lên p95 ~200
+    'iaq_score_max':   200.0,
 }
 
 FEATURE_COLS = [
