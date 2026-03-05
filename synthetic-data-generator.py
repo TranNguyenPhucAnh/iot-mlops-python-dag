@@ -13,7 +13,7 @@ Anomaly scenarios (~5% của total):
   2. extreme_heat   — nhiệt độ cao bất thường
   3. sensor_drift   — gas_resistance giảm dần bất thường
 """
-
+# python message_generator.py --total 5000 --anomaly-rate 0.05 --days-spread 7 Gửi 5000 messages, anomaly 5%, trải trong 7 ngày
 import boto3
 import json
 import uuid
