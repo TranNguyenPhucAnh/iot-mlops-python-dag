@@ -1,0 +1,125 @@
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-sa
+  containers:
+  - name: jnlp
+    image: jenkins/inbound-agent:latest
+    tty: true
+
+  - name: python
+    image: python:3.12-slim
+    command: ["/bin/sh"]
+    tty: true
+'''
+        }
+    }
+
+    // ── Parameters — hiện lên UI khi trigger manual ────────────
+    parameters {
+        integer(name: 'TOTAL',
+                defaultValue: 5000,
+                description: 'Tổng số messages cần generate')
+
+        string(name: 'ANOMALY_RATE',
+               defaultValue: '0.05',
+               description: 'Tỷ lệ anomaly (0.05 = 5%)')
+
+        integer(name: 'DAYS_SPREAD',
+                defaultValue: 7,
+                description: 'Trải timestamp trong bao nhiêu ngày')
+
+        booleanParam(name: 'DRY_RUN',
+                     defaultValue: false,
+                     description: 'Nếu bật: chỉ preview, không push SQS')
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        // ── Stage 1: Checkout ──────────────────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Branch : ${env.GIT_BRANCH}"
+                echo "   Commit : ${env.GIT_COMMIT}"
+            }
+        }
+
+        // ── Stage 2: Validate ──────────────────────────────────
+        stage('Validate') {
+            steps {
+                script {
+                    if (!fileExists('message_generator.py')) {
+                        error "❌ message_generator.py không tìm thấy trong repo"
+                    }
+                    if (params.ANOMALY_RATE.toFloat() < 0 || params.ANOMALY_RATE.toFloat() > 1) {
+                        error "❌ ANOMALY_RATE phải trong khoảng 0.0 - 1.0"
+                    }
+                    echo "✅ Validate passed"
+                    echo "   TOTAL       : ${params.TOTAL}"
+                    echo "   ANOMALY_RATE: ${params.ANOMALY_RATE}"
+                    echo "   DAYS_SPREAD : ${params.DAYS_SPREAD}"
+                    echo "   DRY_RUN     : ${params.DRY_RUN}"
+                }
+            }
+        }
+
+        // ── Stage 3: Install dependencies ─────────────────────
+        stage('Install Dependencies') {
+            steps {
+                container('python') {
+                    sh '''
+                        pip install boto3 --quiet
+                        echo "✅ Dependencies installed"
+                    '''
+                }
+            }
+        }
+
+        // ── Stage 4: Generate & Push messages ─────────────────
+        // IRSA của jenkins-sa cần có quyền sqs:SendMessage
+        stage('Generate Messages') {
+            steps {
+                container('python') {
+                    script {
+                        def dryRunFlag = params.DRY_RUN ? '--dry-run' : ''
+
+                        sh """
+                            echo "🚀 Running message_generator.py..."
+                            python message_generator.py \\
+                                --total        ${params.TOTAL} \\
+                                --anomaly-rate ${params.ANOMALY_RATE} \\
+                                --days-spread  ${params.DAYS_SPREAD} \\
+                                ${dryRunFlag}
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                if (params.DRY_RUN) {
+                    echo "✅ DRY RUN completed — không có message nào được push"
+                } else {
+                    echo "✅ ${params.TOTAL} messages pushed to SQS thành công"
+                }
+            }
+        }
+        failure {
+            echo "❌ Pipeline failed — xem logs bên trên để debug"
+        }
+    }
+}
