@@ -1,0 +1,131 @@
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-sa
+  containers:
+  - name: jnlp
+    image: jenkins/inbound-agent:latest
+    tty: true
+
+  - name: docker
+    image: docker:24.0.5-dind
+    securityContext:
+      privileged: true
+    tty: true
+    args:
+      - --host=unix:///var/run/docker.sock
+    volumeMounts:
+      - name: docker-graph-storage
+        mountPath: /var/lib/docker
+
+  volumes:
+  - name: docker-graph-storage
+    emptyDir: {}
+'''
+        }
+    }
+
+    environment {
+        AWS_REGION = "ap-southeast-1"
+        ECR_URI    = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
+        PREFIX     = "updater"
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 20, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        // ── Stage 1: Checkout ──────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Branch : ${env.GIT_BRANCH}"
+                echo "   Commit : ${env.GIT_COMMIT}"
+            }
+        }
+
+        // ── Stage 2: Validate ──────────────────────────────────────
+        stage('Validate') {
+            steps {
+                script {
+                    // Điều chỉnh path nếu Dockerfile nằm trong subfolder
+                    if (!fileExists('Dockerfile')) {
+                        error "❌ Dockerfile không tìm thấy trong repo"
+                    }
+                    echo "✅ Dockerfile found"
+                }
+            }
+        }
+
+        // ── Stage 3: Build & Push ──────────────────────────────────
+        stage('Build & Push') {
+            steps {
+                container('docker') {
+                    script {
+                        env.IMAGE_TAG = "commit-${env.GIT_COMMIT.take(7)}"
+
+                        sh '''
+                            apk add --no-cache aws-cli
+
+                            echo "🔐 Logging in to ECR..."
+                            aws ecr get-login-password --region ap-southeast-1 \
+                                | docker login --username AWS --password-stdin \
+                                  408279620390.dkr.ecr.ap-southeast-1.amazonaws.com
+
+                            echo "🐳 Building updater image (linux/amd64)..."
+                            docker build \
+                                --platform linux/amd64 \
+                                --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                                --build-arg GIT_COMMIT=$GIT_COMMIT \
+                                -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG \
+                                -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-latest \
+                                -f Dockerfile \
+                                .
+
+                            echo "🧪 Smoke test — kiểm tra aws + argocd-image-updater binary..."
+                            docker run --rm \
+                                --entrypoint sh \
+                                408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG \
+                                -c "
+aws --version && \
+/manager --version && \
+echo '✅ Smoke test passed'
+"
+
+                            echo "🚀 Pushing to ECR..."
+                            docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG
+                            docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-latest
+                            echo "✅ Pushed: updater-$IMAGE_TAG"
+                        '''
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ IMAGE UPDATER PUSHED | Tag: updater-${env.IMAGE_TAG}"
+            echo "   ArgoCD Image Updater sẽ dùng image mới sau khi manifest được update"
+        }
+        failure {
+            echo "❌ Pipeline failed — xem logs bên trên để debug"
+        }
+        always {
+            sh '''
+                docker rmi 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG || true
+                docker rmi 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-latest     || true
+                docker image prune -f || true
+            '''
+            echo "🧹 Docker cleanup complete"
+        }
+    }
+}
