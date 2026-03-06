@@ -144,14 +144,14 @@ except Exception as e:
                                 --platform linux/amd64 \
                                 --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
                                 --build-arg GIT_COMMIT=$GIT_COMMIT \
-                                -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG \
-                                -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:latest \
+                                -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:lambda-$IMAGE_TAG \
+                                -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:lambda-latest \
                                 lambda/
 
                             echo "🧪 Smoke test..."
                             docker run --rm \
                                 --entrypoint python \
-                                408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG \
+                                408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:lambda-$IMAGE_TAG \
                                 -c "
 import joblib, sys
 model  = joblib.load('/var/task/model.pkl')
@@ -164,8 +164,8 @@ print(f'Smoke test passed | pred={pred[0]}')
 "
 
                             echo "🚀 Pushing to ECR..."
-                            docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG
-                            docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:latest
+                            docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:lambda-$IMAGE_TAG
+                            docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:lambda-latest
                             echo "✅ Pushed: $IMAGE_TAG"
                         '''
                     }
@@ -183,7 +183,7 @@ print(f'Smoke test passed | pred={pred[0]}')
                         echo "⚡ Updating Lambda: aqi-prediction-lambda..."
                         aws lambda update-function-code \
                             --function-name aqi-prediction-lambda \
-                            --image-uri     408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:$IMAGE_TAG \
+                            --image-uri     408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:lambda-$IMAGE_TAG \
                             --region        ap-southeast-1
 
                         echo "⏳ Waiting for update to complete..."
@@ -257,7 +257,7 @@ EOF
 
     post {
         success {
-            echo "✅ DEPLOYMENT SUCCESSFUL | Image: ${env.IMAGE_TAG} | Lambda: aqi-prediction-lambda | Build: #${BUILD_NUMBER}"
+            echo "✅ DEPLOYMENT SUCCESSFUL | Image: lambda-${env.IMAGE_TAG} | Lambda: aqi-prediction-lambda | Build: #${BUILD_NUMBER}"
         }
         failure {
             echo "❌ Pipeline failed — xem logs bên trên để debug"
