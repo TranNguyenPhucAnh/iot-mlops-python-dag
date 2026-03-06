@@ -37,7 +37,7 @@ spec:
     environment {
         AWS_REGION           = "ap-southeast-1"
         ECR_URI              = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
-        LAMBDA_FUNCTION_NAME = "aqi-prediction-lambda"
+        LAMBDA_FUNCTION_NAME = "anomalies_detection"
         S3_BUCKET            = "iot-bme680-data-lake-prod"
     }
 
