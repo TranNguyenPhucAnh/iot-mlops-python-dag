@@ -57,10 +57,10 @@ spec:
             steps {
                 script {
                     // Điều chỉnh path nếu Dockerfile nằm trong subfolder
-                    if (!fileExists('Dockerfile')) {
-                        error "❌ Dockerfile không tìm thấy trong repo"
+                    if (!fileExists('Dockerfile.updater')) {
+                        error "❌ Dockerfile.updater không tìm thấy trong repo"
                     }
-                    echo "✅ Dockerfile found"
+                    echo "✅ Dockerfile.updater found"
                 }
             }
         }
@@ -87,7 +87,7 @@ spec:
                                 --build-arg GIT_COMMIT=$GIT_COMMIT \
                                 -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG \
                                 -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-latest \
-                                -f Dockerfile \
+                                -f Dockerfile.updater \
                                 .
 
                             echo "🧪 Smoke test — kiểm tra aws + argocd-image-updater binary..."
@@ -120,11 +120,12 @@ echo '✅ Smoke test passed'
             echo "❌ Pipeline failed — xem logs bên trên để debug"
         }
         always {
-            sh '''
-                docker rmi 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG || true
-                docker rmi 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-latest     || true
-                docker image prune -f || true
-            '''
+            container('docker') {
+                sh '''
+                    docker rmi 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-latest || true
+                    docker image prune -f || true
+                '''
+            }
             echo "🧹 Docker cleanup complete"
         }
     }
