@@ -80,7 +80,7 @@ spec:
                         def imageTag = "commit-${env.GIT_COMMIT.take(7)}"
                         echo "Đang build image: ${ECR_REPO}:${imageTag}"
 
-                        sh "docker build -t ${ECR_REPO}:${imageTag} -t ${ECR_REPO} /airflow"
+                        sh "docker build -t ${ECR_REPO}:${imageTag} -t ${ECR_REPO} ."
                         // 4. Push lên ECR
                         sh "docker push ${ECR_REPO}:${imageTag}"
                         sh "docker push ${ECR_REPO}"
