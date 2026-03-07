@@ -263,8 +263,29 @@ EOF
             echo "❌ Pipeline failed — xem logs bên trên để debug"
         }
         always {
+            // Cleanup workspace files
             sh "rm -f lambda/model.pkl lambda/scaler.pkl model.pkl scaler.pkl || true"
             echo "🧹 Workspace cleanup complete"
+    
+            // Cleanup Docker images trên agent
+            container('docker') {
+                sh '''
+                    REPO="408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
+    
+                    echo "🧹 Cleaning up old lambda images in local Docker cache..."
+    
+                    # Xoá tất cả lambda-* trừ 2 tag mới nhất: lambda-$IMAGE_TAG và lambda-latest
+                    docker image ls "$REPO" \
+                      --filter reference="$REPO:lambda-*" \
+                      --format "{{.Repository}}:{{.Tag}}" | \
+                      grep -v "lambda-${IMAGE_TAG}" | \
+                      grep -v "lambda-latest" | \
+                      xargs -r docker rmi -f || true
+    
+                    # Optional: dọn dangling layers
+                    docker image prune -f || true
+                '''
+            }
         }
     }
 }
