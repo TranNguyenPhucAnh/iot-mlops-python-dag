@@ -1,16 +1,10 @@
 FROM argoprojlabs/argocd-image-updater:latest
-
 USER root
 
-# AWS CLI static (no pip)
-RUN apk add --no-cache curl unzip \
-    && wget "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
-    && unzip awscliv2.zip \
-    && ./aws/install \
-    && aws --version \
-    && rm -rf aws awscliv2.zip
+# aws-cli từ Alpine community repo — không cần curl/unzip, không bị conflict
+RUN apk add --no-cache aws-cli \
+    && aws --version
 
-# Tạo symlink /manager → binary thật
 RUN ln -sf /usr/local/bin/argocd-image-updater /manager \
     && chmod 755 /manager
 
