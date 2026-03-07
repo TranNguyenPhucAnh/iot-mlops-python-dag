@@ -95,7 +95,7 @@ spec:
                             docker run --rm \
                                 --entrypoint sh \
                                 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG \
-                                -c "aws --version && /manager --version && echo Smoke test passed"
+                                -c "aws --version && /manager version && echo Smoke test passed"
 
                             echo "🚀 Pushing to ECR..."
                             docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG
