@@ -37,7 +37,7 @@ spec:
     environment {
         AWS_REGION           = "ap-southeast-1"
         ECR_URI              = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
-        LAMBDA_FUNCTION_NAME = "anomalies_detection"
+        LAMBDA_FUNCTION_NAME = "anomalies-detection"
         S3_BUCKET            = "iot-bme680-data-lake-prod"
     }
 
@@ -180,15 +180,15 @@ print(f'Smoke test passed | pred={pred[0]}')
                     sh '''
                         apk add --no-cache aws-cli
 
-                        echo "⚡ Updating Lambda: anomalies_detection..."
+                        echo "⚡ Updating Lambda: anomalies-detection..."
                         aws lambda update-function-code \
-                            --function-name anomalies_detection \
+                            --function-name anomalies-detection \
                             --image-uri     408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:lambda-$IMAGE_TAG \
                             --region        ap-southeast-1
 
                         echo "⏳ Waiting for update to complete..."
                         aws lambda wait function-updated \
-                            --function-name anomalies_detection \
+                            --function-name anomalies-detection \
                             --region        ap-southeast-1
 
                         echo "✅ Lambda updated"
@@ -219,7 +219,7 @@ print('Payload written:', json.dumps(payload))
     cat /tmp/lambda_payload.json
 
     aws lambda invoke \\
-        --function-name anomalies_detection \\
+        --function-name anomalies-detection \\
         --region        ap-southeast-1 \\
         --cli-binary-format raw-in-base64-out \\
         --payload       file:///tmp/lambda_payload.json \\
@@ -257,7 +257,7 @@ EOF
 
     post {
         success {
-            echo "✅ DEPLOYMENT SUCCESSFUL | Image: lambda-${env.IMAGE_TAG} | Lambda: anomalies_detection | Build: #${BUILD_NUMBER}"
+            echo "✅ DEPLOYMENT SUCCESSFUL | Image: lambda-${env.IMAGE_TAG} | Lambda: anomalies-detection | Build: #${BUILD_NUMBER}"
         }
         failure {
             echo "❌ Pipeline failed — xem logs bên trên để debug"
