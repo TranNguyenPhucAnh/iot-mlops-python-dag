@@ -59,7 +59,7 @@ spec:
         stage('Validate') {
             steps {
                 script {
-                    if (!fileExists('message_generator.py')) {
+                    if (!fileExists('generator/message_generator.py')) {
                         error "❌ message_generator.py không tìm thấy trong repo"
                     }
                     if (!params.TOTAL.isInteger() || params.TOTAL.toInteger() <= 0) {
@@ -102,7 +102,7 @@ spec:
 
                         sh """
                             echo "🚀 Running message_generator.py..."
-                            python message_generator.py \\
+                            python generator/message_generator.py \\
                                 --total        ${params.TOTAL} \\
                                 --anomaly-rate ${params.ANOMALY_RATE} \\
                                 --days-spread  ${params.DAYS_SPREAD} \\
