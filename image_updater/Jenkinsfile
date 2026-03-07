@@ -119,7 +119,7 @@ spec:
         always {
             container('docker') {
                 sh '''
-                    docker image ls 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680 --filter reference=*updater* -q | xargs -r docker rmi || true
+                    docker image ls 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680 --filter reference=*updater* -q | xargs -r docker rmi -f || true
                     docker image prune -f || true
                 '''
             }
