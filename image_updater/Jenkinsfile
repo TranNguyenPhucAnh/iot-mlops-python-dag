@@ -88,7 +88,7 @@ spec:
                                 -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG \
                                 -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-latest \
                                 -f Dockerfile \
-                                .
+                                /image_updater
 
                             echo "🧪 Smoke test — kiểm tra aws + argocd-image-updater binary..."
                             docker run --rm \
