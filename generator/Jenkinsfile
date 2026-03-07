@@ -21,17 +21,17 @@ spec:
 
     // ── Parameters — hiện lên UI khi trigger manual ────────────
     parameters {
-        integer(name: 'TOTAL',
-                defaultValue: 5000,
-                description: 'Tổng số messages cần generate')
+        string(name: 'TOTAL',
+               defaultValue: '5000',
+               description: 'Tổng số messages cần generate')
 
         string(name: 'ANOMALY_RATE',
                defaultValue: '0.05',
                description: 'Tỷ lệ anomaly (0.05 = 5%)')
 
-        integer(name: 'DAYS_SPREAD',
-                defaultValue: 7,
-                description: 'Trải timestamp trong bao nhiêu ngày')
+        string(name: 'DAYS_SPREAD',
+               defaultValue: '7',
+               description: 'Trải timestamp trong bao nhiêu ngày')
 
         booleanParam(name: 'DRY_RUN',
                      defaultValue: false,
@@ -61,6 +61,12 @@ spec:
                 script {
                     if (!fileExists('message_generator.py')) {
                         error "❌ message_generator.py không tìm thấy trong repo"
+                    }
+                    if (!params.TOTAL.isInteger() || params.TOTAL.toInteger() <= 0) {
+                        error "❌ TOTAL phải là số nguyên dương"
+                    }
+                    if (!params.DAYS_SPREAD.isInteger() || params.DAYS_SPREAD.toInteger() <= 0) {
+                        error "❌ DAYS_SPREAD phải là số nguyên dương"
                     }
                     if (params.ANOMALY_RATE.toFloat() < 0 || params.ANOMALY_RATE.toFloat() > 1) {
                         error "❌ ANOMALY_RATE phải trong khoảng 0.0 - 1.0"
