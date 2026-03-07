@@ -119,12 +119,6 @@ spec:
         always {
             container('docker') {
                 sh '''
-                    docker image ls 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680 \
-                      --filter reference='*updater*' \
-                      --format '{{.Repository}}:{{.Tag}}' \
-                      | grep -v "updater-${IMAGE_TAG}" | grep -v "updater-latest" \
-                      | xargs -r docker rmi -f || true
-
                     docker image prune -f || true
                 '''
             }
