@@ -57,12 +57,13 @@ spec:
         stage('Unit Test DAGs') {
             steps {
                 container('python') {
-                    sh '''
-
-                    pip install -r requirements.txt \
-                        --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.0.2/constraints-3.12.txt"
-                    pytest tests/test_dag_integrity.py -v
-                    '''
+                    dir('airflow') {
+                        sh '''
+                        pip install -r requirements.txt \
+                            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.0.2/constraints-3.12.txt"
+                        pytest tests/test_dag_integrity.py -v
+                        '''
+                    }
                 }
             }
         }
