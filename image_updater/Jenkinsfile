@@ -32,7 +32,6 @@ spec:
     environment {
         AWS_REGION = "ap-southeast-1"
         ECR_URI    = "408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680"
-        PREFIX     = "updater"
     }
 
     options {
@@ -56,11 +55,10 @@ spec:
         stage('Validate') {
             steps {
                 script {
-                    // Điều chỉnh path nếu Dockerfile nằm trong subfolder
                     if (!fileExists('image_updater/Dockerfile')) {
-                        error "❌ Dockerfile không tìm thấy trong repo"
+                        error "❌ image_updater/Dockerfile không tìm thấy trong repo"
                     }
-                    echo "✅ Dockerfile found"
+                    echo "✅ image_updater/Dockerfile found"
                 }
             }
         }
@@ -70,8 +68,12 @@ spec:
             steps {
                 container('docker') {
                     script {
+                        // Set IMAGE_TAG trong Groovy trước
                         env.IMAGE_TAG = "commit-${env.GIT_COMMIT.take(7)}"
-
+                    }
+                    // dir() chuyển build context vào image_updater/
+                    // → Dockerfile và tất cả COPY context đều relative từ đây
+                    dir('image_updater') {
                         sh '''
                             apk add --no-cache aws-cli
 
@@ -87,18 +89,13 @@ spec:
                                 --build-arg GIT_COMMIT=$GIT_COMMIT \
                                 -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG \
                                 -t 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-latest \
-                                -f Dockerfile \
-                                /image_updater
+                                .
 
-                            echo "🧪 Smoke test — kiểm tra aws + argocd-image-updater binary..."
+                            echo "🧪 Smoke test — kiểm tra aws + /manager binary..."
                             docker run --rm \
                                 --entrypoint sh \
                                 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG \
-                                -c "
-aws --version && \
-/manager --version && \
-echo '✅ Smoke test passed'
-"
+                                -c "aws --version && /manager --version && echo Smoke test passed"
 
                             echo "🚀 Pushing to ECR..."
                             docker push 408279620390.dkr.ecr.ap-southeast-1.amazonaws.com/iot-bme680:updater-$IMAGE_TAG
