@@ -80,7 +80,7 @@ def interpret_decision_score(score: float) -> str:
 
 
 # ── Correlation rules — domain knowledge encoding ────────────────────────────
-def analyze_correlation(T: float, H: float, P: float, G: float) -> tuple[str, str, list[str]]:
+def analyze_correlation(T, H, P, G):
     """
     Trả về (anomaly_type, severity, contributing_factors)
     dựa trên tương quan giữa 4 chỉ số.
