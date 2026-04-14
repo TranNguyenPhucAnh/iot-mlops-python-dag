@@ -323,12 +323,6 @@ def train_anomaly_model(**context):
         scaler_path = '/tmp/scaler.pkl'
         joblib.dump(scaler, scaler_path)
         mlflow.log_artifact(scaler_path, artifact_path='preprocessor')
-
-        # Sau khi train xong, export ra path cố định để Jenkins lấy
-        s3_hook = S3Hook(aws_conn_id='aws_default')
-        joblib.dump(model, '/tmp/model.pkl')
-        s3_hook.load_file('/tmp/model.pkl',  'models/latest/model.pkl',  bucket_name=S3_BUCKET, replace=True)
-        s3_hook.load_file(scaler_path,       'models/latest/scaler.pkl', bucket_name=S3_BUCKET, replace=True)
       
         mlflow.sklearn.log_model(
             sk_model=model,
@@ -423,6 +417,8 @@ def register_model(**context):
             f"hum=[{thresholds['humidity_min']},{thresholds['humidity_max']}]"
         )
     )
+
+    # ── Transition to Staging ─────────────────────────────────────
     client.transition_model_version_stage(
         name=REGISTERED_MODEL_NAME,
         version=version,
@@ -431,19 +427,99 @@ def register_model(**context):
     )
     logger.info(f"✅ Version {version} → Staging")
 
+    # ── Auto-promote to Production nếu chưa có champion ──────────
+    # Nếu đã có Production → giữ Staging, cần manual review
     try:
         prod_versions = client.get_latest_versions(REGISTERED_MODEL_NAME, stages=["Production"])
-        if prod_versions:
-            logger.info(f"ℹ️ Production hiện tại: version {prod_versions[0].version}")
-            logger.info(f"   New Staging version {version} cần manual promotion sau khi validate")
+        if not prod_versions:
+            client.transition_model_version_stage(
+                name=REGISTERED_MODEL_NAME,
+                version=version,
+                stage="Production",
+                archive_existing_versions=True
+            )
+            logger.info(f"✅ Version {version} → Production (first deploy, no existing champion)")
+            final_stage = "Production"
         else:
-            logger.info("ℹ️ Chưa có Production model — promote Staging lên Production thủ công sau khi validate")
+            champion = prod_versions[0]
+            logger.info(
+                f"ℹ️ Champion hiện tại: version {champion.version} đang ở Production\n"
+                f"   Version {version} ở Staging — cần manual promotion sau khi validate"
+            )
+            final_stage = "Staging"
     except Exception as e:
-        logger.warning(f"Could not compare with production model: {e}")
+        logger.warning(f"⚠️ Không check được Production versions: {e}")
+        final_stage = "Staging"
+
+    # ── Sync S3 models/latest/ — chỉ khi đã register thành công ──
+    # Đặt sau registration để tránh ghi S3 khi model chưa pass threshold
+    # (bước sync cũ trong train_model đã bị xóa)
+    logger.info("📦 Syncing artifacts sang S3 models/latest/...")
+    try:
+        # Download từ MLflow artifacts của run này
+        model_local_path  = mlflow.artifacts.download_artifacts(
+            artifact_uri=f"runs:/{run_id}/model/model.pkl"
+        )
+        scaler_local_path = mlflow.artifacts.download_artifacts(
+            artifact_uri=f"runs:/{run_id}/preprocessor/scaler.pkl"
+        )
+
+        s3_hook = S3Hook(aws_conn_id='aws_default')
+        s3_hook.load_file(
+            filename=model_local_path,
+            key='models/latest/model.pkl',
+            bucket_name=S3_BUCKET,
+            replace=True
+        )
+        s3_hook.load_file(
+            filename=scaler_local_path,
+            key='models/latest/scaler.pkl',
+            bucket_name=S3_BUCKET,
+            replace=True
+        )
+
+        # Ghi metadata để Jenkins biết version nào đang ở latest
+        import json as json_module
+        metadata = {
+            'model_name':    REGISTERED_MODEL_NAME,
+            'version':       version,
+            'stage':         final_stage,
+            'run_id':        run_id,
+            'training_date': context['ds'],
+            'metrics': {
+                'roc_auc':   metrics['test_roc_auc'],
+                'precision': metrics['test_precision'],
+                'recall':    metrics['test_recall'],
+                'f1':        metrics['test_f1'],
+            }
+        }
+        with open('/tmp/model_metadata.json', 'w') as f:
+            json_module.dump(metadata, f, indent=2)
+        s3_hook.load_file(
+            filename='/tmp/model_metadata.json',
+            key='models/latest/metadata.json',
+            bucket_name=S3_BUCKET,
+            replace=True
+        )
+        logger.info(
+            f"✅ S3 synced:\n"
+            f"   s3://{S3_BUCKET}/models/latest/model.pkl\n"
+            f"   s3://{S3_BUCKET}/models/latest/scaler.pkl\n"
+            f"   s3://{S3_BUCKET}/models/latest/metadata.json\n"
+            f"   MLflow run_id={run_id} | version={version} | stage={final_stage}"
+        )
+    except Exception as e:
+        # S3 sync thất bại không nên block registration
+        # Model đã register MLflow thành công — log warning và tiếp tục
+        logger.error(
+            f"❌ S3 sync thất bại: {e}\n"
+            f"   Model đã register MLflow version {version} thành công\n"
+            f"   Jenkins sẽ dùng artifact cũ cho đến khi sync được fix"
+        )
 
     context['ti'].xcom_push(key='model_version', value=version)
-    return {'model_name': REGISTERED_MODEL_NAME, 'version': version, 'stage': 'Staging'}
-
+    context['ti'].xcom_push(key='final_stage',   value=final_stage)
+    return {'model_name': REGISTERED_MODEL_NAME, 'version': version, 'stage': final_stage}
 
 def send_notification(**context):
     logger.info("=" * 60)
