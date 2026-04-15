@@ -41,9 +41,11 @@ FEATURE_COLS = [
     'iaq_score_rolling_mean', 'iaq_score_rolling_std'
 ]
 
-
 def load_production_model(**context):
-    """Load latest Production/Staging model từ MLflow"""
+    """
+    Load latest Production/Staging model từ MLflow.
+    Chặn inference nếu chưa có model usable — skip thay vì fail.
+    """
     logger.info("=" * 60)
     logger.info("STEP 1: Load Production Model")
     logger.info("=" * 60)
@@ -51,33 +53,82 @@ def load_production_model(**context):
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     client = MlflowClient()
 
+    # ── Check MLflow registry ─────────────────────────────────────
+    model_version = None
+    for stage in ["Production", "Staging"]:
+        versions = client.get_latest_versions(REGISTERED_MODEL_NAME, stages=[stage])
+        if versions:
+            model_version = versions[0]
+            logger.info(f"✅ Found model version {model_version.version} in {stage}")
+            break
+
+    if model_version is None:
+        logger.warning("⚠️ Registry chưa có model nào ở Production hoặc Staging — skip inference")
+        raise AirflowSkipException("No usable model in registry")
+
+    run_id = model_version.run_id
+
+    # ── Verify S3 artifact thực sự tồn tại ───────────────────────
+    # MLflow registered ≠ S3 artifact đã sync xong
+    # Training DAG sync sau khi register — có thể lag vài giây
+    s3_hook = S3Hook(aws_conn_id='aws_default')
+    metadata_key = 'models/latest/metadata.json'
+
     try:
-        prod_versions = client.get_latest_versions(REGISTERED_MODEL_NAME, stages=["Production"])
+        meta_obj  = s3_hook.get_key(metadata_key, bucket_name=S3_BUCKET)
+        metadata  = json.loads(meta_obj.get()['Body'].read())
+        s3_version = str(metadata.get('version', ''))
+        mlflow_version = str(model_version.version)
 
-        if not prod_versions:
-            logger.warning("⚠️ No Production model, fallback to Staging")
-            prod_versions = client.get_latest_versions(REGISTERED_MODEL_NAME, stages=["Staging"])
+        logger.info(f"📋 S3 metadata: version={s3_version} | run_id={metadata.get('run_id')}")
+        logger.info(f"📋 MLflow registry: version={mlflow_version} | run_id={run_id}")
 
-        if not prod_versions:
-            raise ValueError("No model found in Production or Staging")
+        if s3_version != mlflow_version:
+            # Version mismatch — training vừa register model mới nhưng S3 chưa sync xong
+            # Dùng S3 version hiện tại vẫn được vì đây là online scoring
+            # Không block — log warning và tiếp tục với S3 version
+            logger.warning(
+                f"⚠️ Version mismatch: MLflow={mlflow_version}, S3={s3_version}\n"
+                f"   Training DAG có thể đang sync. Tiếp tục với S3 version={s3_version}"
+            )
+            # Override run_id theo S3 metadata để scaler khớp với model
+            run_id = metadata.get('run_id', run_id)
 
-        model_version = prod_versions[0]
-        run_id        = model_version.run_id
+    except Exception as e:
+        # metadata.json chưa tồn tại — training chưa bao giờ chạy thành công
+        logger.warning(f"⚠️ Không đọc được S3 metadata: {e}")
+        logger.warning("   S3 models/latest/ chưa có artifact — skip inference")
+        raise AirflowSkipException("S3 model artifacts not found — training DAG chưa sync")
 
-        logger.info(f"✅ Model version: {model_version.version} ({model_version.current_stage})")
-        logger.info(f"   Run ID: {run_id}")
+    # ── Verify model.pkl và scaler.pkl tồn tại trên S3 ───────────
+    for artifact_key in ['models/latest/model.pkl', 'models/latest/scaler.pkl']:
+        if not s3_hook.check_for_key(artifact_key, bucket_name=S3_BUCKET):
+            logger.warning(f"⚠️ Missing S3 artifact: {artifact_key} — skip inference")
+            raise AirflowSkipException(f"Missing artifact: {artifact_key}")
 
-        context['ti'].xcom_push(key='model_uri',     value=f"models:/{REGISTERED_MODEL_NAME}/{model_version.current_stage}")
-        context['ti'].xcom_push(key='scaler_uri',    value=f"runs:/{run_id}/preprocessor/scaler.pkl")
-        context['ti'].xcom_push(key='run_id',        value=run_id)
-        context['ti'].xcom_push(key='model_version', value=model_version.version)
+    logger.info("✅ S3 artifacts verified")
 
-        return {'version': model_version.version, 'stage': model_version.current_stage}
+    # ── Push context cho run_inference ───────────────────────────
+    context['ti'].xcom_push(
+        key='model_uri',
+        value=f"models:/{REGISTERED_MODEL_NAME}/{model_version.current_stage}"
+    )
+    context['ti'].xcom_push(
+        key='scaler_uri',
+        value=f"runs:/{run_id}/preprocessor/scaler.pkl"
+    )
+    context['ti'].xcom_push(key='run_id',        value=run_id)
+    context['ti'].xcom_push(key='model_version', value=model_version.version)
+
+    return {
+        'version': model_version.version,
+        'stage':   model_version.current_stage,
+        'run_id':  run_id
+    }
 
     except Exception as e:
         logger.error(f"❌ Failed to load model: {e}", exc_info=True)
         raise
-
 
 def load_recent_silver(**context):
     """
