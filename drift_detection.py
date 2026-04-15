@@ -471,16 +471,24 @@ def save_drift_report(**context):
 
 
 def branch_on_drift(**context):
-    """
-    BranchPythonOperator: quyết định trigger training hay skip.
-    """
     overall_drift = context['ti'].xcom_pull(task_ids='compute_drift', key='overall_drift')
-    logger.info(f"🔀 Branch decision — drift={overall_drift}")
 
-    if overall_drift:
-        return 'trigger_training'
-    return 'no_drift_action'
+    if not overall_drift:
+        return 'no_drift_action'
 
+    # Kiểm tra có Staging model đang chờ review không
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    client = MlflowClient()
+    staging_versions = client.get_latest_versions(REGISTERED_MODEL_NAME, stages=["Staging"])
+
+    if staging_versions:
+        logger.info(
+            f"⚠️ Drift detected nhưng đã có Staging model v{staging_versions[0].version} "
+            f"chờ review — skip trigger training để tránh retrain liên tục"
+        )
+        return 'no_drift_action'   # chờ human review xong rồi tính
+
+    return 'trigger_training'
 
 def send_drift_notification(**context):
     """
