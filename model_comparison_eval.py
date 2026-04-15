@@ -168,10 +168,14 @@ def load_models_from_registry(**context):
 
     # ── Guard: challenger phải mới hơn champion ────────────────────
     if int(challenger_info['version']) <= int(champion_info['version']):
+        # Lấy thêm context để debug
+        all_versions = client.search_model_versions(f"name='{REGISTERED_MODEL_NAME}'")
+        version_summary = [(mv.version, mv.current_stage) for mv in all_versions]
         raise ValueError(
             f"❌ Challenger version {challenger_info['version']} không mới hơn "
             f"Champion version {champion_info['version']} — "
-            f"registry state bất thường, kiểm tra lại MLflow."
+            f"registry state bất thường, kiểm tra lại MLflow.\n"
+            f"   All versions: {version_summary}"
         )
 
     logger.info(
