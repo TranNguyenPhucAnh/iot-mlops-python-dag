@@ -34,7 +34,6 @@ from sklearn.metrics import (
 )
 import joblib
 import shutil
-from airflow.api.client.local_client import Client
 
 logger = logging.getLogger(__name__)
 
@@ -519,19 +518,6 @@ def register_model(**context):
             f"   Model đã register MLflow version {version} thành công\n"
             f"   Jenkins sẽ dùng artifact cũ cho đến khi sync được fix"
         )
-
-    # Chỉ trigger comparison nếu đã có Production model để so sánh
-    if final_stage == "Staging" and prod_versions:
-        try:
-            c = Client(None, None)
-            c.trigger_dag(
-                dag_id='iot_ml_model_comparison',
-                run_id=f"triggered_by_training_{context['ds_nodash']}_{version}",
-                conf={'challenger_version': version, 'triggered_by': 'training_pipeline'}
-            )
-            logger.info(f"✅ Triggered iot_ml_model_comparison DAG cho v{version}")
-        except Exception as e:
-            logger.warning(f"⚠️ Không trigger được comparison DAG: {e} — trigger thủ công")
 
     context['ti'].xcom_push(key='model_version', value=version)
     context['ti'].xcom_push(key='final_stage',   value=final_stage)
