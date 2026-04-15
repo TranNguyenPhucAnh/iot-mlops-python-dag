@@ -34,6 +34,7 @@ from sklearn.metrics import (
 )
 import joblib
 import shutil
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 logger = logging.getLogger(__name__)
 
@@ -566,7 +567,19 @@ def send_notification(**context):
     logger.info(message)
     return message
 
-
+def branch_trigger_comparison(**context):
+    """Chỉ trigger comparison nếu đã có Production model."""
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    client = MlflowClient()
+    prod_versions = client.get_latest_versions(REGISTERED_MODEL_NAME, stages=["Production"])
+    
+    if prod_versions:
+        logger.info(f"✅ Production model v{prod_versions[0].version} exists — will trigger comparison")
+        return 'trigger_comparison'
+    
+    logger.info("ℹ️ Chưa có Production model — skip comparison (first-time training)")
+    return 'skip_comparison'
+  
 # ==================== DAG ====================
 
 default_args = {
@@ -591,15 +604,38 @@ with DAG(
     tags=['ml', 'iot', 'anomaly-detection', 'mlflow', 'production', 'v4']
 ) as dag:
 
-    t_load   = PythonOperator(task_id='load_silver_data',         python_callable=load_silver_data)
-    t_train  = PythonOperator(task_id='train_model',              python_callable=train_anomaly_model)
-    t_decide = BranchPythonOperator(task_id='decide_registration', python_callable=decide_model_registration)
-    t_reg    = PythonOperator(task_id='register_model',           python_callable=register_model)
-    t_skip   = EmptyOperator(task_id='skip_registration')
+    t_load   = PythonOperator(task_id='load_silver_data',  python_callable=load_silver_data)
+    t_train  = PythonOperator(task_id='train_model',       python_callable=train_anomaly_model)
+
+    t_decide = BranchPythonOperator(
+        task_id='decide_registration',
+        python_callable=decide_model_registration,
+    )
+
+    t_reg  = PythonOperator(task_id='register_model',    python_callable=register_model)
+    t_skip = EmptyOperator(task_id='skip_registration')
+
+    t_branch_compare = BranchPythonOperator(
+        task_id='branch_comparison',
+        python_callable=branch_trigger_comparison,
+    )
+
+    t_trigger_comparison = TriggerDagRunOperator(
+        task_id='trigger_comparison',
+        trigger_dag_id='iot_ml_model_comparison',
+        conf={'triggered_by': 'training_pipeline', 'training_date': '{{ ds }}'},
+        wait_for_completion=False,
+    )
+
+    t_skip_comparison = EmptyOperator(task_id='skip_comparison')
+
     t_notify = PythonOperator(
         task_id='send_notification',
         python_callable=send_notification,
-        trigger_rule='none_failed'
+        trigger_rule='none_failed_min_one_success',
     )
 
-    t_load >> t_train >> t_decide >> [t_reg, t_skip] >> t_notify
+    # ── DAG flow ──────────────────────────────────────────────────
+    t_load >> t_train >> t_decide >> [t_reg, t_skip]
+    t_reg  >> t_branch_compare   >> [t_trigger_comparison, t_skip_comparison]
+    [t_trigger_comparison, t_skip_comparison, t_skip] >> t_notify
