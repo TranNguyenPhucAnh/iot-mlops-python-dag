@@ -157,6 +157,28 @@ def load_models_from_registry(**context):
             info['logged_params']  = {}
             info['training_date']  = 'unknown'
 
+    # ── Guard: champion và challenger phải là 2 version khác nhau ─
+    if champion_info['version'] == challenger_info['version']:
+        raise ValueError(
+            f"❌ Champion và Challenger cùng version {champion_info['version']} — "
+            f"không có model mới để so sánh.\n"
+            f"   Nguyên nhân có thể: training lần gần nhất fail threshold "
+            f"(skip_registration) hoặc chưa có lần training thứ 2 thành công."
+        )
+
+    # ── Guard: challenger phải mới hơn champion ────────────────────
+    if int(challenger_info['version']) <= int(champion_info['version']):
+        raise ValueError(
+            f"❌ Challenger version {challenger_info['version']} không mới hơn "
+            f"Champion version {champion_info['version']} — "
+            f"registry state bất thường, kiểm tra lại MLflow."
+        )
+
+    logger.info(
+        f"✅ Champion v{champion_info['version']} vs Challenger v{challenger_info['version']} "
+        f"— hợp lệ để so sánh"
+    )
+  
     context['ti'].xcom_push(key='champion_info',   value=champion_info)
     context['ti'].xcom_push(key='challenger_info', value=challenger_info)
 
