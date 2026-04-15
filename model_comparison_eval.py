@@ -40,7 +40,6 @@ from sklearn.metrics import (
     f1_score, accuracy_score, confusion_matrix
 )
 from sklearn.model_selection import train_test_split
-from airflow.api.client.local_client import Client
 
 logger = logging.getLogger(__name__)
 
