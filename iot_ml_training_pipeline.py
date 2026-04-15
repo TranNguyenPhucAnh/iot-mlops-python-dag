@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
+import mlflow.artifacts
 import pandas as pd
 import numpy as np
 import json
@@ -32,6 +33,7 @@ from sklearn.metrics import (
     confusion_matrix
 )
 import joblib
+import shutil
 
 logger = logging.getLogger(__name__)
 
