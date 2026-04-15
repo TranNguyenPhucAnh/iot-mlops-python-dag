@@ -7,7 +7,7 @@ Thay đổi so với v3:
   - [FIX] train/test metrics nhất quán — không còn augmented vs real
 
 Flow: Silver layer → Train → MLflow Registry
-Schedule: Daily at 2 AM UTC
+Schedule: Manual
 """
 
 from airflow import DAG
@@ -596,7 +596,7 @@ default_args = {
 with DAG(
     dag_id='iot_ml_training_pipeline',
     description='Silver → Train (domain-rule labels, no synthetic) → MLflow Registry | v4',
-    schedule='0 2 * * *',
+    schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
